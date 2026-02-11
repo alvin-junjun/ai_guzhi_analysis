@@ -93,8 +93,9 @@ class HtmlResponse(Response):
 class StaticFileResponse(Response):
     """静态文件响应封装"""
     
-    # MIME 类型映射
+    # MIME 类型映射（含 .html 以便在浏览器中直接打开而非下载）
     MIME_TYPES = {
+        '.html': 'text/html; charset=utf-8',
         '.png': 'image/png',
         '.jpg': 'image/jpeg',
         '.jpeg': 'image/jpeg',

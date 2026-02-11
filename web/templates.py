@@ -1343,7 +1343,7 @@ function showToast(message, type) {
   <div class="container">
     <!-- 服务公告入口 -->
     <div class="announcement-banner">
-      <a href="/sources/announcement.html" class="announcement-link">
+      <a href="/sources/announcement.html" class="announcement-link" target="_blank" rel="noopener noreferrer">
         <span class="announcement-icon">📢</span>
         <span class="announcement-text">智能股票分析服务公告</span>
         <span class="announcement-cta">点击查看 →</span>
