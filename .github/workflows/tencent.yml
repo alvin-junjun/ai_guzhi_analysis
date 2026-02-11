@@ -13,13 +13,9 @@ jobs:
       - name: SSH Deploy
         uses: appleboy/ssh-action@v1.0.0
         with:
-          host: 43.159.47.180
+          host: ${{ secrets.SERVER_IP }}
           username: root
-          key: b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
-QyNTUxOQAAACBXsLrPzx4g2j5gxfyt/K8iEDrxxkiPIb0J5Wfty7pfXAAAAKDUDb0o1A29
-KAAAAAtzc2gtZWQyNTUxOQAAACBXsLrPzx4g2j5gxfyt/K8iEDrxxkiPIb0J5Wfty7pfXA
-AAAEC5a+59LOp+lGF9yCX6VC/0T0QA5gniHOZ11qBay498flewus/PHiDaPmDF/K38ryIQ
-OvHGSI8hvQnlZ+3Lul9cAAAAF3Jvb3RAVk0tMC04LW9wZW5jbG91ZG9zAQIDBAUG
+          key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             cd /www/wwwroot/touyanai/touyan-xiugai/daily_stock_analysis
             bash deploy.sh
