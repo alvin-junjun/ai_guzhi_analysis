@@ -212,6 +212,7 @@ def render_login_page(
             try {{
                 const response = await fetch('/api/auth/login', {{
                     method: 'POST',
+                    credentials: 'include',
                     headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
                     body: `target=${{encodeURIComponent(target)}}&password=${{encodeURIComponent(password)}}`
                 }});
@@ -223,8 +224,17 @@ def render_login_page(
                         try {{ sessionStorage.setItem('session_token', data.session_token); }} catch (e) {{}}
                     }}
                     showMessage('登录成功，正在跳转...', 'success');
+                    let finalRedirect = redirect || '/';
+                    try {{
+                        if (finalRedirect.indexOf('http') === 0) {{
+                            const u = new URL(finalRedirect);
+                            finalRedirect = (u.origin === window.location.origin) ? (u.pathname + u.search) : '/';
+                        }} else if (finalRedirect.charAt(0) !== '/') {{
+                            finalRedirect = '/' + finalRedirect;
+                        }}
+                    }} catch (e) {{ finalRedirect = '/'; }}
                     setTimeout(() => {{
-                        window.location.href = redirect;
+                        window.location.href = finalRedirect;
                     }}, 500);
                 }} else {{
                     showMessage(data.error || '登录失败', 'error');
