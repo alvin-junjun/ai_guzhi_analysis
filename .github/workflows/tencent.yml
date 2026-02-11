@@ -17,5 +17,5 @@ jobs:
           username: root
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
-            cd /www/wwwroot/touyanai/touyan-xiugai/daily_stock_analysis
+            cd /www/wwwroot/touyanai/touyan-xiugai/ai_guzhi_analysis
             bash deploy.sh
