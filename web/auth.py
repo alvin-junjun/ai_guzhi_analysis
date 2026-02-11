@@ -83,9 +83,9 @@ class AuthMiddleware:
         """
         从请求头中提取 Session Token
         
-        支持两种方式：
-        1. Cookie: session_token=xxx
-        2. Header: Authorization: Bearer xxx
+        支持两种方式（优先 Authorization，避免过期 Cookie 覆盖登录态）：
+        1. Header: Authorization: Bearer xxx（前端 sessionStorage，与登录响应一致）
+        2. Cookie: session_token=xxx
         
         Args:
             headers: HTTP 请求头
@@ -93,7 +93,12 @@ class AuthMiddleware:
         Returns:
             Session Token 或 None
         """
-        # 方式1: 从 Cookie 获取
+        # 优先从 Authorization 获取（与前端 getAuthHeaders 一致，避免 Cookie 未写入或被代理剥离）
+        auth_header = headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            return auth_header[7:]
+        
+        # 再从 Cookie 获取
         cookie_header = headers.get('Cookie', '')
         if cookie_header:
             cookie = SimpleCookie()
@@ -103,11 +108,6 @@ class AuthMiddleware:
                     return cookie[self.SESSION_COOKIE_NAME].value
             except Exception:
                 pass
-        
-        # 方式2: 从 Authorization Header 获取
-        auth_header = headers.get('Authorization', '')
-        if auth_header.startswith('Bearer '):
-            return auth_header[7:]
         
         return None
     
@@ -205,9 +205,11 @@ class AuthMiddleware:
         cookie[self.SESSION_COOKIE_NAME]['path'] = '/'
         cookie[self.SESSION_COOKIE_NAME]['httponly'] = True
         cookie[self.SESSION_COOKIE_NAME]['max-age'] = max_age
+        cookie[self.SESSION_COOKIE_NAME]['samesite'] = 'Lax'
         
-        # 生产环境应添加 Secure 标志
-        # cookie[self.SESSION_COOKIE_NAME]['secure'] = True
+        # HTTPS 部署时设置 COOKIE_SECURE=true，Cookie 仅通过 HTTPS 发送
+        if self.config.cookie_secure:
+            cookie[self.SESSION_COOKIE_NAME]['secure'] = True
         
         # 提取 Set-Cookie 值
         output = cookie.output(header='')
