@@ -206,7 +206,8 @@ class AuthMiddleware:
         cookie[self.SESSION_COOKIE_NAME]['httponly'] = True
         cookie[self.SESSION_COOKIE_NAME]['max-age'] = max_age
         cookie[self.SESSION_COOKIE_NAME]['samesite'] = 'Lax'
-        
+        if self.config.cookie_domain:
+            cookie[self.SESSION_COOKIE_NAME]['domain'] = self.config.cookie_domain
         # HTTPS 部署时设置 COOKIE_SECURE=true，Cookie 仅通过 HTTPS 发送
         if self.config.cookie_secure:
             cookie[self.SESSION_COOKIE_NAME]['secure'] = True

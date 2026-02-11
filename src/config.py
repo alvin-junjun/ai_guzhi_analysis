@@ -208,6 +208,7 @@ class Config:
     session_secret_key: str = "change-this-to-a-random-secret-key-in-production"  # Session 加密密钥
     session_expire_hours: int = 24           # Session 过期时间（小时）
     cookie_secure: bool = False             # HTTPS 部署时设为 True，Cookie 仅通过 HTTPS 发送
+    cookie_domain: Optional[str] = None      # Cookie 域名，如 .guzhiaibot.online，便于 www 与根域共享登录态
     phone_whitelist: List[str] = field(default_factory=list)  # 手机号白名单
     email_whitelist: List[str] = field(default_factory=list)  # 邮箱白名单
     verification_code_expire_minutes: int = 5  # 验证码过期时间（分钟）
@@ -428,6 +429,7 @@ class Config:
             session_secret_key=os.getenv('SESSION_SECRET_KEY', 'change-this-to-a-random-secret-key-in-production'),
             session_expire_hours=int(os.getenv('SESSION_EXPIRE_HOURS', '24')),
             cookie_secure=os.getenv('COOKIE_SECURE', 'false').lower() == 'true',
+            cookie_domain=os.getenv('COOKIE_DOMAIN') or None,
             phone_whitelist=[p.strip() for p in os.getenv('PHONE_WHITELIST', '').split(',') if p.strip()],
             email_whitelist=[e.strip() for e in os.getenv('EMAIL_WHITELIST', '').split(',') if e.strip()],
             verification_code_expire_minutes=int(os.getenv('VERIFICATION_CODE_EXPIRE_MINUTES', '5')),

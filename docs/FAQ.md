@@ -116,6 +116,47 @@ PROXY_PORT=10809
 
 ---
 
+### Q7b: 生产环境登录成功后仍显示「未登录」？
+
+**现象**：本地 (如 127.0.0.1:8200) 登录后能正常显示用户名和退出，同一套代码部署到生产 (如 guzhiaibot.online) 后登录完成跳转回首页仍显示「未登录」。
+
+**常见原因与处理**：
+
+1. **HTTPS 未配置 Cookie Secure**  
+   生产若使用 HTTPS，必须在 `.env` 中设置：
+   ```bash
+   COOKIE_SECURE=true
+   ```
+   否则浏览器可能不保存或发送带 Secure 的 Cookie，导致登录态丢失。
+
+2. **www 与根域不同源**  
+   若用户有时访问 `https://guzhiaibot.online`、有时访问 `https://www.guzhiaibot.online`，两者属于不同源，`sessionStorage` 不共享，且 Cookie 默认只对当前主机有效。  
+   解决：生产环境设置 Cookie 域名，使根域与 www 共享登录态：
+   ```bash
+   COOKIE_DOMAIN=.guzhiaibot.online
+   ```
+   并尽量统一跳转到同一主域名（只使用 www 或只使用根域），避免混用。
+
+3. **反向代理未透传 Set-Cookie**  
+   Nginx/云厂商代理若未正确透传后端返回的 `Set-Cookie`，浏览器收不到 Cookie。  
+   解决：确认代理配置不会丢弃或重写 `Set-Cookie` 响应头；必要时在 Nginx 中增加：
+   ```nginx
+   proxy_pass_header Set-Cookie;
+   ```
+   或等价配置。
+
+4. **登录后跳转到不同域名**  
+   登录成功后若重定向到与登录页不同域（如从 www 跳到根域），`sessionStorage` 里的 `session_token` 不会带到新域。  
+   解决：已改为登录成功后仅在同一 origin 内跳转（使用当前 `window.location.origin`），请确保生产环境登录页与首页使用同一主域名。
+
+5. **快速自检**  
+   登录完成后在浏览器开发者工具中检查：  
+   - **Network**：`/api/auth/login` 响应体是否包含 `session_token`，响应头是否包含 `Set-Cookie`；  
+   - **Application → Storage**：当前域名下 `sessionStorage` 是否有 `session_token`；  
+   - 再次打开首页时，请求 `/api/auth/user` 的请求头是否带有 `Authorization: Bearer <token>` 或请求是否携带 Cookie。
+
+---
+
 ## 📱 推送相关
 
 ### Q8: 机器人推送失败，提示消息过长？

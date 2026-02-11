@@ -224,17 +224,18 @@ def render_login_page(
                         try {{ sessionStorage.setItem('session_token', data.session_token); }} catch (e) {{}}
                     }}
                     showMessage('登录成功，正在跳转...', 'success');
-                    let finalRedirect = redirect || '/';
+                    let path = redirect || '/';
                     try {{
-                        if (finalRedirect.indexOf('http') === 0) {{
-                            const u = new URL(finalRedirect);
-                            finalRedirect = (u.origin === window.location.origin) ? (u.pathname + u.search) : '/';
-                        }} else if (finalRedirect.charAt(0) !== '/') {{
-                            finalRedirect = '/' + finalRedirect;
+                        if (path.indexOf('http') === 0) {{
+                            const u = new URL(path);
+                            path = (u.origin === window.location.origin) ? (u.pathname + u.search) : '/';
+                        }} else if (path.charAt(0) !== '/') {{
+                            path = '/' + path;
                         }}
-                    }} catch (e) {{ finalRedirect = '/'; }}
+                    }} catch (e) {{ path = '/'; }}
+                    var targetUrl = window.location.origin + path;
                     setTimeout(() => {{
-                        window.location.href = finalRedirect;
+                        window.location.href = targetUrl;
                     }}, 500);
                 }} else {{
                     showMessage(data.error || '登录失败', 'error');
