@@ -316,7 +316,7 @@ def create_default_router() -> Router:
     # === 页面路由 ===
     router.register(
         "/", "GET",
-        lambda q: page_handler.handle_index(),
+        lambda q, headers=None: page_handler.handle_index(headers or {}),
         "配置首页"
     )
     
@@ -343,6 +343,11 @@ def create_default_router() -> Router:
         "/user", "GET",
         lambda q, headers=None: auth_page_handler.handle_user_center_page(q, headers or {}),
         "用户中心"
+    )
+    router.register(
+        "/user/history", "GET",
+        lambda q, headers=None: auth_page_handler.handle_history_page(q, headers or {}),
+        "历史分析记录页"
     )
     
     # === 鉴权 API 路由 ===
@@ -374,6 +379,17 @@ def create_default_router() -> Router:
         "/api/auth/user", "GET",
         lambda q, headers=None: auth_api_handler.handle_user_info(q, headers or {}),
         "获取用户信息"
+    )
+    router.register(
+        "/api/user/analysis-history", "GET",
+        lambda q, headers=None: auth_api_handler.handle_analysis_history(q, headers or {}),
+        "获取当前用户历史分析记录"
+    )
+    
+    router.register(
+        "/api/referral/share-link", "GET",
+        lambda q, headers=None: auth_api_handler.handle_referral_share_link(q, headers or {}),
+        "获取邀请分享链接"
     )
     
     router.register(

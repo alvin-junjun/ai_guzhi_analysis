@@ -294,12 +294,13 @@ def render_login_page(
     return html.encode('utf-8')
 
 
-def render_register_page(error: str = '') -> bytes:
+def render_register_page(error: str = '', ref: str = '') -> bytes:
     """
     渲染注册页面
     
     Args:
         error: 错误消息
+        ref: 邀请人分享码（来自 URL ?ref=）
     """
     error_html = f'<div class="error-msg">{error}</div>' if error else ''
     
@@ -609,6 +610,7 @@ def render_register_page(error: str = '') -> bytes:
         </div>
         
         <form id="registerForm">
+            <input type="hidden" id="ref" name="ref" value="{ref}">
             <div class="form-group">
                 <label for="target">手机号 / QQ邮箱</label>
                 <input type="text" id="target" name="target" 
@@ -838,11 +840,12 @@ def render_register_page(error: str = '') -> bytes:
             submitBtn.disabled = true;
             submitBtn.textContent = '注册中...';
             
+            const ref = document.getElementById('ref').value || '';
             try {{
                 const response = await fetch('/api/auth/register', {{
                     method: 'POST',
                     headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
-                    body: `target=${{encodeURIComponent(target)}}&password=${{encodeURIComponent(password)}}&nickname=${{encodeURIComponent(nickname)}}&email=${{encodeURIComponent(finalEmail)}}`
+                    body: `target=${{encodeURIComponent(target)}}&password=${{encodeURIComponent(password)}}&nickname=${{encodeURIComponent(nickname)}}&email=${{encodeURIComponent(finalEmail)}}&ref=${{encodeURIComponent(ref)}}`
                 }});
                 
                 const data = await response.json();
@@ -1146,6 +1149,128 @@ def render_user_center_page(
 </body>
 </html>'''
     
+    return html.encode('utf-8')
+
+
+def render_history_page() -> bytes:
+    """
+    渲染历史分析记录页面（数据由前端请求 /api/user/analysis-history 获取）
+    """
+    html = f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>历史分析记录 - A股智能分析系统</title>
+    <style>
+        {_get_common_styles()}
+        .history-container {{
+            max-width: 900px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }}
+        .back-link {{
+            display: inline-block;
+            margin-bottom: 20px;
+            color: #4a90d9;
+            text-decoration: none;
+        }}
+        .back-link:hover {{ text-decoration: underline; }}
+        .page-title {{
+            font-size: 22px;
+            margin-bottom: 20px;
+            color: #1a1a2e;
+        }}
+        .history-table {{
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }}
+        .history-table th, .history-table td {{
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid #f0f0f0;
+        }}
+        .history-table th {{
+            background: #f8fafc;
+            font-weight: 600;
+            color: #475569;
+            font-size: 13px;
+        }}
+        .history-table tr:hover {{ background: #f8fafc; }}
+        .history-table .col-date {{ width: 100px; }}
+        .history-table .col-code {{ width: 90px; }}
+        .history-table .col-name {{ width: 100px; }}
+        .history-table .col-summary {{ max-width: 320px; overflow: hidden; text-overflow: ellipsis; }}
+        .history-empty {{
+            text-align: center;
+            padding: 48px 20px;
+            color: #64748b;
+        }}
+        .history-loading {{
+            text-align: center;
+            padding: 48px 20px;
+            color: #64748b;
+        }}
+        .sentiment-bullish {{ color: #10b981; }}
+        .sentiment-bearish {{ color: #ef4444; }}
+        .sentiment-neutral {{ color: #64748b; }}
+    </style>
+</head>
+<body>
+    <div class="history-container">
+        <a href="/" class="back-link">← 返回首页</a>
+        <a href="/user" class="back-link" style="margin-left: 12px;">个人中心</a>
+        <h1 class="page-title">📋 历史分析记录</h1>
+        <div id="history_content">
+            <div class="history-loading">加载中...</div>
+        </div>
+    </div>
+    <script>
+        function getAuthHeaders() {{
+            try {{
+                var t = sessionStorage.getItem('session_token');
+                return t ? {{ 'Authorization': 'Bearer ' + t }} : {{}};
+            }} catch (e) {{ return {{}}; }}
+        }}
+        async function loadHistory() {{
+            const el = document.getElementById('history_content');
+            try {{
+                const res = await fetch('/api/user/analysis-history?limit=100', {{ credentials: 'include', headers: getAuthHeaders() }});
+                const data = await res.json();
+                if (!data.success) {{
+                    el.innerHTML = '<div class="history-empty">' + (data.error || '加载失败') + '，<a href="/login">请先登录</a></div>';
+                    return;
+                }}
+                const list = data.list || [];
+                if (list.length === 0) {{
+                    el.innerHTML = '<div class="history-empty">暂无分析记录，去首页发起分析吧 ~</div>';
+                    return;
+                }}
+                let rows = '<table class="history-table"><thead><tr><th class="col-date">分析日期</th><th class="col-code">股票代码</th><th class="col-name">股票名称</th><th>AI 摘要</th><th>创建时间</th></tr></thead><tbody>';
+                for (const item of list) {{
+                    const date = item.analysis_date || '-';
+                    const code = item.stock_code || '-';
+                    const name = (item.stock_name || '-').substring(0, 8);
+                    const summary = (item.ai_summary || '-').substring(0, 80);
+                    const created = (item.created_at || '-').replace('T', ' ');
+                    const sentiment = item.sentiment || '';
+                    const sc = sentiment === 'bullish' ? 'sentiment-bullish' : (sentiment === 'bearish' ? 'sentiment-bearish' : 'sentiment-neutral');
+                    rows += '<tr><td>' + date + '</td><td>' + code + '</td><td class="' + sc + '">' + name + '</td><td class="col-summary" title="' + (item.ai_summary || '').replace(/"/g, '&quot;') + '">' + summary + '</td><td>' + created + '</td></tr>';
+                }}
+                rows += '</tbody></table>';
+                el.innerHTML = rows;
+            }} catch (err) {{
+                el.innerHTML = '<div class="history-empty">加载失败，请刷新重试</div>';
+            }}
+        }}
+        loadHistory();
+    </script>
+</body>
+</html>'''
     return html.encode('utf-8')
 
 

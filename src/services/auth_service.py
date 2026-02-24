@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from src.config import get_config
 from src.storage import get_db
 from src.models.user import User, VerificationCode, UserSession
+from src.services.referral_service import get_referral_service
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +170,8 @@ class AuthService:
         password: str,
         nickname: str = None,
         ip_address: str = None,
-        email: str = None
+        email: str = None,
+        referrer_share_code: str = None
     ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         """
         密码注册（无需验证码）
@@ -180,6 +182,7 @@ class AuthService:
             nickname: 昵称（可选）
             ip_address: 注册 IP
             email: 接收报告的QQ邮箱（手机号注册时传入）
+            referrer_share_code: 邀请人分享码（从邀请链接 ref 参数传入）
             
         Returns:
             (是否成功, 消息, 用户信息)
@@ -227,23 +230,38 @@ class AuthService:
                 if existing_email:
                     return False, '该QQ邮箱已被其他账号使用', None
             
-            # 7. 创建用户
+            # 6.1 解析邀请人（若有分享码）
+            referrer_id = None
+            if referrer_share_code and referrer_share_code.strip():
+                referrer_id = get_referral_service().get_referrer_id_by_share_code(referrer_share_code.strip())
+            
+            # 7. 创建用户（新用户需设置 share_code 以便其日后可分享）
+            import secrets
+            share_code = 'R' + secrets.token_hex(6)
             user = User(
                 uuid=str(uuid.uuid4()),
                 phone=target if target_type == 'phone' else None,
-                email=final_email,  # 统一保存邮箱
+                email=final_email,
                 password_hash=User.hash_password(password),
                 nickname=nickname,
                 status='active',
                 membership_level='free',
                 last_login_at=datetime.now(),
                 last_login_ip=ip_address,
+                referrer_id=referrer_id,
+                share_code=share_code,
             )
             session.add(user)
+            session.flush()
+            if referrer_id and referrer_id != user.id:
+                get_referral_service().create_referral_record(session, referrer_id, user.id)
             session.commit()
             session.refresh(user)
             
-            logger.info(f"新用户注册: {target}, 报告接收邮箱: {final_email}")
+            if referrer_id and referrer_id != user.id:
+                get_referral_service().grant_registration_reward(referrer_id, user.id)
+            
+            logger.info(f"新用户注册: {target}, 报告接收邮箱: {final_email}, referrer_id={referrer_id}")
             return True, '注册成功', user.to_dict()
     
     def register(

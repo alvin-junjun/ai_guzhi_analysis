@@ -22,13 +22,14 @@ from web.handlers import Response, JsonResponse, HtmlResponse
 from web.auth import get_auth_middleware, AuthContext
 from web.auth_templates import (
     render_login_page, render_register_page, render_user_center_page,
-    render_membership_page
+    render_membership_page, render_history_page
 )
 from src.config import get_config
 from src.services.auth_service import get_auth_service
 from src.services.user_service import get_user_service
 from src.services.membership_service import get_membership_service
 from src.services.payment_service import get_payment_service
+from src.services.referral_service import get_referral_service
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +55,11 @@ class AuthPageHandler:
     
     def handle_register_page(self, query: Dict[str, list]) -> Response:
         """
-        注册页面 GET /register
+        注册页面 GET /register，支持 ?ref=分享码 用于邀请注册
         """
         error_msg = query.get('error', [''])[0]
-        body = render_register_page(error=error_msg)
+        ref = query.get('ref', [''])[0]
+        body = render_register_page(error=error_msg, ref=ref)
         return HtmlResponse(body)
     
     def handle_user_center_page(
@@ -94,6 +96,20 @@ class AuthPageHandler:
             benefits=benefits,
             usage_info=usage_info
         )
+        return HtmlResponse(body)
+    
+    def handle_history_page(
+        self,
+        query: Dict[str, list],
+        headers: Dict[str, str]
+    ) -> Response:
+        """
+        历史分析记录页面 GET /user/history
+        """
+        context = self.auth_middleware.authenticate(headers)
+        if not context.is_authenticated:
+            return self._redirect_response('/login?redirect=/user/history')
+        body = render_history_page()
         return HtmlResponse(body)
     
     def handle_membership_page(
@@ -260,6 +276,7 @@ class AuthApiHandler:
         password = form_data.get('password', [''])[0]
         nickname = form_data.get('nickname', [''])[0].strip() or None
         email = form_data.get('email', [''])[0].strip() or None
+        ref = form_data.get('ref', [''])[0].strip() or None
         
         if not target or not password:
             return JsonResponse(
@@ -274,7 +291,8 @@ class AuthApiHandler:
             password=password,
             nickname=nickname,
             ip_address=ip_address,
-            email=email
+            email=email,
+            referrer_share_code=ref
         )
         
         if not success:
@@ -339,6 +357,65 @@ class AuthApiHandler:
                 'can_analyze': can_analyze,
             }
         })
+    
+    def handle_referral_share_link(
+        self,
+        query: Dict[str, list],
+        headers: Dict[str, str]
+    ) -> Response:
+        """
+        获取邀请分享链接 GET /api/referral/share-link（需登录）
+        返回分享码，前端用 origin + /register?ref= 拼完整链接并复制
+        """
+        context = self.auth_middleware.authenticate(headers)
+        if not context.is_authenticated:
+            return JsonResponse(
+                {'success': False, 'error': '请先登录'},
+                status=HTTPStatus.UNAUTHORIZED
+            )
+        ok, share_code = get_referral_service().get_or_create_share_code(context.user_id)
+        if not share_code:
+            return JsonResponse({'success': False, 'error': '获取分享码失败'})
+        return JsonResponse({
+            'success': True,
+            'share_code': share_code,
+        })
+    
+    def handle_analysis_history(
+        self,
+        query: Dict[str, list],
+        headers: Dict[str, str]
+    ) -> Response:
+        """
+        获取当前用户历史分析记录 GET /api/user/analysis-history
+        支持 query: limit, offset
+        """
+        context = self.auth_middleware.authenticate(headers)
+        if not context.is_authenticated:
+            return JsonResponse(
+                {'success': False, 'error': '未登录', 'code': 'UNAUTHORIZED'},
+                status=HTTPStatus.UNAUTHORIZED
+            )
+        limit = 100
+        offset = 0
+        q = query or {}
+        if q.get('limit'):
+            try:
+                limit = min(int(q['limit'][0]), 200)
+            except (ValueError, TypeError):
+                pass
+        if q.get('offset'):
+            try:
+                offset = max(0, int(q['offset'][0]))
+            except (ValueError, TypeError):
+                pass
+        user_service = get_user_service()
+        items = user_service.get_analysis_history(
+            user_id=context.user_id,
+            limit=limit,
+            offset=offset
+        )
+        return JsonResponse({'success': True, 'list': items})
     
     def handle_membership_plans(
         self,

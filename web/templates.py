@@ -612,9 +612,27 @@ def render_toast(message: str, toast_type: str = "success") -> str:
     """
 
 
+def _build_nav_ssr_html(nav_ssr: dict) -> tuple:
+    """根据服务端鉴权结果生成导航栏 HTML，用于首屏直出，避免登录后仍显示未登录。"""
+    display_name = nav_ssr.get("display_name") or "用户"
+    level_text = nav_ssr.get("level_text") or "免费版"
+    is_vip = nav_ssr.get("is_vip", False)
+    user_info_html = f'👤 {html.escape(display_name)} <span style="color:#999;font-size:12px;">({html.escape(level_text)})</span>'
+    links = ['<a href="/user">👤 个人中心</a>', '<a href="/user/history">📋 历史记录</a>',
+             '<a href="#" class="btn-share" onclick="copyShareLink(event)">📤 分享</a>']
+    if not is_vip:
+        links.append('<a href="/membership" class="btn-vip">⭐ 升级会员</a>')
+    else:
+        links.append('<a href="/membership">💎 会员中心</a>')
+    links.append('<a href="#" class="btn-logout" onclick="logout()">退出</a>')
+    nav_links_html = "".join(links)
+    return user_info_html, nav_links_html
+
+
 def render_config_page(
     stock_list: str = "",
-    message: Optional[str] = None
+    message: Optional[str] = None,
+    nav_ssr: Optional[dict] = None,
 ) -> bytes:
     """
     渲染配置页面
@@ -622,8 +640,17 @@ def render_config_page(
     Args:
         stock_list: 当前自选股列表（已弃用，保留兼容）
         message: 可选的提示消息
+        nav_ssr: 服务端鉴权结果，用于首屏渲染导航栏，避免登录后仍显示未登录。格式:
+                 {"display_name": str, "level_text": str, "is_vip": bool} 或 None
     """
     toast_html = render_toast(message) if message else ""
+    if nav_ssr:
+        nav_user_info_html, nav_links_html = _build_nav_ssr_html(nav_ssr)
+        nav_initial = f'<span id="nav_user_info">{nav_user_info_html}</span><div id="nav_links" class="nav-links">{nav_links_html}</div>'
+        nav_data_ssr = ' data-nav-ssr="1"'
+    else:
+        nav_initial = '<span id="nav_user_info">加载中...</span><div id="nav_links" class="nav-links"></div>'
+        nav_data_ssr = ""
 
     # 分析组件的 JavaScript - 支持多任务
     analysis_js = """
@@ -920,11 +947,24 @@ function getAuthHeaders() {
     } catch (e) { return {}; }
 }
 
-// 页面加载时初始化用户导航
+// 页面加载时：优先加载导航再加载自选股，避免多请求竞争；若导航已 SSR 则先加载自选股，导航后台静默刷新
 document.addEventListener('DOMContentLoaded', function() {
-    loadUserNav();
-    refreshWatchlist();
-    loadWatchlistGroups();
+    var navEl = document.getElementById('user_nav');
+    var isNavSsr = navEl && navEl.getAttribute('data-nav-ssr') === '1';
+    function afterNav() {
+        refreshWatchlist();
+        loadWatchlistGroups();
+    }
+    if (isNavSsr) {
+        afterNav();
+        if (typeof requestIdleCallback !== 'undefined') {
+            requestIdleCallback(function() { loadUserNav(); }, { timeout: 800 });
+        } else {
+            setTimeout(function() { loadUserNav(); }, 100);
+        }
+    } else {
+        loadUserNav().then(afterNav).catch(function() { afterNav(); });
+    }
 });
 
 // 加载用户导航信息
@@ -951,6 +991,8 @@ async function loadUserNav() {
             userInfo.innerHTML = '👤 ' + displayName + ' <span style="color:#999;font-size:12px;">(' + levelText + ')</span>';
             
             let linksHtml = '<a href="/user">👤 个人中心</a>';
+            linksHtml += '<a href="/user/history">📋 历史记录</a>';
+            linksHtml += '<a href="#" class="btn-share" onclick="copyShareLink(event)">📤 分享</a>';
             if (!isVip) {
                 linksHtml += '<a href="/membership" class="btn-vip">⭐ 升级会员</a>';
             } else {
@@ -963,6 +1005,27 @@ async function loadUserNav() {
         console.error('加载用户信息失败:', err);
         userInfo.textContent = '加载失败';
         navLinks.innerHTML = '<a href="/login">🔑 登录</a>';
+    }
+}
+
+// 复制邀请分享链接（需登录）
+async function copyShareLink(e) {
+    if (e) e.preventDefault();
+    try {
+        const res = await fetch('/api/referral/share-link', { credentials: 'include', headers: getAuthHeaders() });
+        const data = await res.json();
+        if (!data.success || !data.share_code) {
+            alert(data.error || '获取分享链接失败');
+            return;
+        }
+        const url = window.location.origin + '/register?ref=' + encodeURIComponent(data.share_code);
+        await navigator.clipboard.writeText(url);
+        if (typeof alert !== 'undefined') {
+            alert('邀请链接已复制到剪贴板，好友通过此链接注册您将获得免费使用次数奖励');
+        }
+    } catch (err) {
+        console.error('复制分享链接失败:', err);
+        alert('复制失败，请重试');
     }
 }
 
@@ -1350,10 +1413,9 @@ function showToast(message, type) {
       </a>
     </div>
 
-    <!-- 顶部用户导航栏 -->
-    <div id="user_nav" class="user-nav">
-      <span id="nav_user_info">加载中...</span>
-      <div id="nav_links" class="nav-links"></div>
+    <!-- 顶部用户导航栏（支持服务端直出，登录后首屏即显示已登录） -->
+    <div id="user_nav" class="user-nav"{nav_data_ssr}>
+      {nav_initial}
     </div>
 
     <h2>📈 A股/港股/美股分析</h2>
@@ -1381,6 +1443,9 @@ function showToast(message, type) {
 
       <!-- 任务列表 -->
       <div id="task_list" class="task-list"></div>
+      <p style="margin-top: 10px; font-size: 13px;">
+        <a href="/user/history" id="link_history">📋 查看历史分析记录</a>
+      </p>
     </div>
 
     <hr class="section-divider">

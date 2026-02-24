@@ -64,11 +64,17 @@ class User(Base):
     last_login_at = Column(DateTime, nullable=True, comment='最后登录时间')
     last_login_ip = Column(String(50), nullable=True, comment='最后登录IP')
     
+    # 邀请相关
+    referrer_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True, comment='邀请人用户ID')
+    referral_bonus_balance = Column(Integer, default=0, nullable=False, comment='邀请奖励的免费使用次数余额')
+    share_code = Column(String(32), unique=True, nullable=True, index=True, comment='分享码，用于生成邀请链接')
+    
     # 时间戳
     created_at = Column(DateTime, default=datetime.now, comment='创建时间')
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, comment='更新时间')
     
     # 关联关系
+    referrer = relationship('User', remote_side='User.id', foreign_keys=[referrer_id])
     sessions = relationship('UserSession', back_populates='user', lazy='dynamic')
     memberships = relationship('UserMembership', back_populates='user', lazy='dynamic')
     watchlists = relationship('UserWatchlist', back_populates='user', lazy='dynamic')
@@ -269,3 +275,23 @@ class UserSession(Base):
     def generate_token(cls) -> str:
         """生成随机 Session Token"""
         return secrets.token_urlsafe(64)
+
+
+class ReferralRecord(Base):
+    """
+    邀请记录表
+    
+    记录谁邀请了谁，以及注册奖励、充值奖励是否已发放
+    """
+    __tablename__ = 'referral_records'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    referrer_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True, comment='邀请人用户ID')
+    referred_user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True, comment='被邀请人用户ID')
+    created_at = Column(DateTime, default=datetime.now, comment='创建时间')
+    registration_reward_given = Column(Boolean, default=False, nullable=False, comment='是否已发放注册奖励')
+    subscription_reward_given = Column(Boolean, default=False, nullable=False, comment='是否已发放充值奖励')
+    subscription_plan_type = Column(String(20), nullable=True, comment='充值套餐类型: weekly/monthly/quarterly')
+
+    referrer = relationship('User', foreign_keys=[referrer_id])
+    referred_user = relationship('User', foreign_keys=[referred_user_id])

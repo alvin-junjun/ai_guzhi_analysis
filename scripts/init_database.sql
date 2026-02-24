@@ -62,12 +62,18 @@ CREATE TABLE `users` (
                          `last_login_at` datetime DEFAULT NULL COMMENT '最后登录时间',
                          `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '注册时间',
                          `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                         `referrer_id` bigint unsigned DEFAULT NULL COMMENT '邀请人用户ID',
+                         `referral_bonus_balance` int NOT NULL DEFAULT 0 COMMENT '邀请奖励的免费使用次数余额',
+                         `share_code` varchar(32) DEFAULT NULL COMMENT '分享码，用于生成邀请链接',
                          PRIMARY KEY (`id`),
                          UNIQUE KEY `uix_uuid` (`uuid`),
                          UNIQUE KEY `uix_phone` (`phone`),
                          UNIQUE KEY `uix_email` (`email`),
                          KEY `ix_status` (`status`),
-                         KEY `ix_created_at` (`created_at`)
+                         KEY `ix_created_at` (`created_at`),
+                         KEY `ix_referrer_id` (`referrer_id`),
+                         UNIQUE KEY `uix_share_code` (`share_code`),
+                         CONSTRAINT `fk_users_referrer` FOREIGN KEY (`referrer_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
 -- ============================================================
 -- 3. 验证码表 (短信/邮件验证码)
@@ -112,6 +118,26 @@ CREATE TABLE `user_sessions` (
     INDEX `ix_expire_at` (`expire_at`),
     CONSTRAINT `fk_sessions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户会话表';
+
+-- ============================================================
+-- 4.1 邀请记录表
+-- ============================================================
+DROP TABLE IF EXISTS `referral_records`;
+CREATE TABLE `referral_records` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `referrer_id` BIGINT UNSIGNED NOT NULL COMMENT '邀请人用户ID',
+    `referred_user_id` BIGINT UNSIGNED NOT NULL COMMENT '被邀请人用户ID',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `registration_reward_given` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已发放注册奖励 0-否 1-是',
+    `subscription_reward_given` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已发放充值奖励 0-否 1-是',
+    `subscription_plan_type` VARCHAR(20) DEFAULT NULL COMMENT '充值套餐类型: weekly/monthly/quarterly',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uix_referrer_referred` (`referrer_id`, `referred_user_id`),
+    INDEX `ix_referrer_id` (`referrer_id`),
+    INDEX `ix_referred_user_id` (`referred_user_id`),
+    CONSTRAINT `fk_referral_referrer` FOREIGN KEY (`referrer_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+    CONSTRAINT `fk_referral_referred` FOREIGN KEY (`referred_user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='邀请记录表';
 
 -- ============================================================
 -- 5. 会员套餐表
@@ -324,7 +350,11 @@ INSERT INTO `system_configs` (`config_key`, `config_value`, `description`) VALUE
 ('free_history_days', '7', '免费用户历史记录保留天数'),
 ('session_expire_hours', '24', 'Session过期时间(小时)'),
 ('verification_code_expire_minutes', '5', '验证码过期时间(分钟)'),
-('verification_code_interval_seconds', '60', '验证码发送间隔(秒)');
+('verification_code_interval_seconds', '60', '验证码发送间隔(秒)'),
+('referral_registration_reward', '10', '每邀请1人注册成功，邀请人获得的免费使用次数'),
+('referral_reward_weekly', '30', '被邀请人购买周卡并支付成功后，邀请人获得的免费使用次数'),
+('referral_reward_monthly', '100', '被邀请人购买月卡并支付成功后，邀请人获得的免费使用次数'),
+('referral_reward_quarterly', '300', '被邀请人购买季卡并支付成功后，邀请人获得的免费使用次数');
 
 SET FOREIGN_KEY_CHECKS = 1;
 

@@ -179,8 +179,20 @@ class MembershipService:
             )
             
             if success:
+                # 邀请充值奖励：在 commit 前读取被邀请人的 referrer_id 与套餐名
+                buyer_id = order.user_id
+                plan_name = plan.name
+                user = session.execute(
+                    select(User).where(User.id == buyer_id)
+                ).scalar_one_or_none()
+                referrer_id = getattr(user, 'referrer_id', None) if user else None
                 session.commit()
                 logger.info(f"订单支付成功: order_no={order_no}")
+                if referrer_id:
+                    from src.services.referral_service import get_referral_service
+                    get_referral_service().grant_subscription_reward(
+                        referrer_id, buyer_id, plan_name
+                    )
                 return True, '支付成功，会员已开通'
             else:
                 session.rollback()

@@ -400,26 +400,38 @@ class UserService:
         if limit == -1:
             return True, today_count, limit
         
-        can_continue = today_count < limit
+        # 有邀请奖励余额时也可继续使用（优先消耗奖励次数）
+        balance = getattr(user, 'referral_bonus_balance', 0) or 0
+        can_continue = (today_count < limit) or (balance > 0)
         return can_continue, today_count, limit
     
     def increment_analysis_count(self, user_id: int) -> int:
         """
-        增加用户今日分析次数
+        增加用户今日分析次数。优先扣减邀请奖励余额，余额为 0 时再扣减每日额度。
         
         Args:
             user_id: 用户 ID
             
         Returns:
-            当前分析次数
+            当日已使用次数（含本次）
         """
-        analysis_count = 0
+        # 第一步：若有邀请奖励余额，优先扣减 1 次，不占用每日额度
+        with self.db.get_session() as session:
+            user = session.execute(
+                select(User).where(User.id == user_id)
+            ).scalar_one_or_none()
+            if user and (getattr(user, 'referral_bonus_balance', 0) or 0) > 0:
+                user.referral_bonus_balance = user.referral_bonus_balance - 1
+                session.commit()
+                usage = self.get_today_usage(user_id)
+                logger.info(f"用户 {user_id} 使用邀请奖励 1 次，剩余余额: {user.referral_bonus_balance}")
+                return usage.analysis_count
         
-        # 第一步：更新 daily_usage 表（核心操作，必须成功）
+        # 第二步：无奖励余额，按原逻辑增加当日使用次数
+        analysis_count = 0
         try:
             with self.db.get_session() as session:
                 today = date.today()
-                
                 usage = session.execute(
                     select(DailyUsage)
                     .where(
@@ -429,7 +441,6 @@ class UserService:
                         )
                     )
                 ).scalar_one_or_none()
-                
                 if not usage:
                     usage = DailyUsage(
                         user_id=user_id,
@@ -439,7 +450,6 @@ class UserService:
                     session.add(usage)
                 else:
                     usage.increment_analysis()
-                
                 session.commit()
                 analysis_count = usage.analysis_count
                 logger.info(f"更新用户 {user_id} 今日分析次数: {analysis_count}")
@@ -447,7 +457,6 @@ class UserService:
             logger.error(f"更新 daily_usage 失败 user_id={user_id}: {e}")
             raise
         
-        # 第二步：更新用户累计分析次数（可选操作，失败不影响主流程）
         try:
             with self.db.get_session() as session:
                 user = session.execute(
@@ -457,7 +466,6 @@ class UserService:
                     user.total_analysis_count = (user.total_analysis_count or 0) + 1
                     session.commit()
         except Exception as e:
-            # 用户表更新失败不影响主流程，只记录日志
             logger.warning(f"更新用户累计分析次数失败 user_id={user_id}: {e}")
         
         return analysis_count

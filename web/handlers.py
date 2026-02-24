@@ -186,9 +186,25 @@ class PageHandler:
     def __init__(self):
         self.config_service = get_config_service()
     
-    def handle_index(self) -> Response:
-        """处理首页请求 GET /"""
-        body = render_config_page()
+    def handle_index(self, headers: dict = None) -> Response:
+        """处理首页请求 GET /。传入 headers 时做服务端鉴权并直出导航栏，避免登录后首屏仍显示未登录。"""
+        nav_ssr = None
+        if headers:
+            from web.auth import get_auth_middleware
+            middleware = get_auth_middleware()
+            context = middleware.authenticate(headers)
+            if context.is_authenticated and context.user:
+                u = context.user
+                benefits = context.benefits or {}
+                display_name = u.nickname or u.email or u.phone or '用户'
+                plan = benefits.get('plan_name')
+                level_text = plan if plan else ('会员' if (getattr(u, 'membership_level', None) and u.membership_level != 'free') else '免费版')
+                nav_ssr = {
+                    'display_name': display_name,
+                    'level_text': level_text or '免费版',
+                    'is_vip': benefits.get('level') == 'vip',
+                }
+        body = render_config_page(nav_ssr=nav_ssr)
         return HtmlResponse(body)
     
     def handle_update(self, form_data: Dict[str, list]) -> Response:
