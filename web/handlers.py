@@ -388,13 +388,19 @@ class ApiHandler:
     def handle_trading_signals(self, query: Dict[str, list]) -> Response:
         """
         获取最新交易信号 GET /api/trading/signals
-        
+
+        支持两种模式：
+        1) 传入股票池：GET /api/trading/signals?stocks=600519,000001,300750
+           对传入的股票做一次分析，返回其中适合买入/加仓的信号（不读 .env 的 STOCK_LIST）。
+        2) 不传股票池：返回最近一次持久化的信号（来自定时分析或 env 配置的股票列表）。
+
         供国信 iQuant 策略拉取买入/加仓信号，再在客户端内用 passorder 下单。
         仅当 TRADING_ENABLED=true 时返回有效数据，否则返回 403。
         """
-        logger.info("[API] /api/trading/signals 被调用 query=%s", query)
         from src.config import get_config
         from src.trading.execution import get_trading_engine
+        from src.trading.signals import build_signals_from_results
+        from datetime import date, datetime
 
         cfg = get_config()
         if not getattr(cfg, "trading_enabled", False):
@@ -408,6 +414,48 @@ class ApiHandler:
                 status=HTTPStatus.FORBIDDEN
             )
 
+        # 解析请求中的股票池（可选）：?stocks=600519,000001,300750
+        stocks_param = (query.get("stocks") or [""])[0]
+        if isinstance(stocks_param, list):
+            stocks_param = (stocks_param[0] or "") if stocks_param else ""
+        stock_codes = [
+            c.strip() for c in str(stocks_param).split(",")
+            if c and c.strip()
+        ]
+
+        if stock_codes:
+            # 按传入的股票池实时分析，返回适合买入的信号（不使用 .env 的 STOCK_LIST）
+            try:
+                from src.core.pipeline import StockAnalysisPipeline
+                pipeline = StockAnalysisPipeline()
+                results = pipeline.run(
+                    stock_codes=stock_codes,
+                    dry_run=False,
+                    send_notification=False,
+                )
+                signals = build_signals_from_results(
+                    results,
+                    only_buy=True,
+                    source_date=date.today(),
+                )
+                now = datetime.now().isoformat()
+                return JsonResponse({
+                    "success": True,
+                    "updated_at": now,
+                    "count": len(signals),
+                    "signals": [s.to_dict() for s in signals],
+                })
+            except Exception as e:
+                return JsonResponse(
+                    {
+                        "success": False,
+                        "error": str(e),
+                        "signals": [],
+                    },
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR
+                )
+
+        # 未传股票池：返回已持久化的最新信号（来自定时任务或 env 股票列表）
         engine = get_trading_engine()
         data = engine.load_latest_signals()
         return JsonResponse({
