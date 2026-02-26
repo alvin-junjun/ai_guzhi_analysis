@@ -392,6 +392,7 @@ class ApiHandler:
         供国信 iQuant 策略拉取买入/加仓信号，再在客户端内用 passorder 下单。
         仅当 TRADING_ENABLED=true 时返回有效数据，否则返回 403。
         """
+        logger.info("[API] /api/trading/signals 被调用 query=%s", query)
         from src.config import get_config
         from src.trading.execution import get_trading_engine
 

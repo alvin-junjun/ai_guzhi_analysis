@@ -255,13 +255,13 @@ class Config:
     # QMT/国信 iQuant 平台登录密码（在 iQuant 客户端登录用，此处仅作配置预留）
     qmt_login_password: Optional[str] = None
     # 国信资金账号/股东账号（用于 iQuant 策略内 ContextInfo.set_account，下单时使用）
-    broker_stock_account: Optional[str] = None
+    broker_stock_account: Optional[str] = 510600126129
     # 国信交易密码（若 iQuant 需在策略中传入则在此配置，否则在客户端输入）
     broker_trade_password: Optional[str] = None
     # 单笔买入最大金额（元），0 表示不限制
-    trading_max_order_amount: float = 0.0
+    trading_max_order_amount: float = 10000.0
     # 单日买入总金额上限（元），0 表示不限制
-    trading_daily_max_buy_amount: float = 0.0
+    trading_daily_max_buy_amount: float = 20000.0
 
     # 单例实例存储
     _instance: Optional['Config'] = None
