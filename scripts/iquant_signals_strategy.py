@@ -4,8 +4,8 @@
 整段复制到 iQuant 策略编辑器即可使用。实盘前请先用模拟模式验证。
 """
 # ==================== 请修改以下配置后复制到 iQuant ====================
-ACCOUNT_ID = '6000000223'                    # 您的资金账号（与 .env 中 BROKER_STOCK_ACCOUNT 一致）
-SIGNALS_API_URL = 'http://127.0.0.1:8000/api/trading/signals'   # 本系统信号接口地址
+ACCOUNT_ID = '510600126129'                    # 您的资金账号（与 .env 中 BROKER_STOCK_ACCOUNT 一致）
+SIGNALS_API_URL = 'https://www.guzhiaibot.online/api/trading/signals'   # 本系统信号接口地址
 BUY_SHARES_PER_SIGNAL = 100                  # 每只信号买入股数（100 的整数倍）
 TIMER_SECONDS = 60                           # 拉取信号间隔（秒）
 # ======================================================================
@@ -16,7 +16,7 @@ def init(ContextInfo):
     ContextInfo.buy_shares = BUY_SHARES_PER_SIGNAL
     ContextInfo.sent_codes = getattr(ContextInfo, 'sent_codes', set())
     ContextInfo.set_account(ContextInfo.acc_id)
-    run_time('on_timer', '%dnSecond' % TIMER_SECONDS, '2000-01-01 09:35:00', 'SH')
+    ContextInfo.run_time('on_timer', '%dnSecond' % TIMER_SECONDS, '2000-01-01 09:35:00', 'SH')
 
 def on_timer(ContextInfo):
     import urllib.request
