@@ -480,6 +480,12 @@ def create_default_router() -> Router:
         "查询任务状态"
     )
     
+    router.register(
+        "/api/trading/signals", "GET",
+        lambda q: api_handler.handle_trading_signals(q),
+        "获取最新交易信号（供国信 iQuant 等拉取）"
+    )
+    
     # === Bot Webhook 路由 ===
     # 注意：Bot Webhook 路由在 dispatch_post 中特殊处理
     # 这里只是为了在路由列表中显示

@@ -554,6 +554,15 @@ class StockAnalysisPipeline:
                 self._send_notifications(results, skip_push=True)
             else:
                 self._send_notifications(results)
+
+        # 自动交易：生成买入/加仓信号并持久化，供国信 iQuant 拉取
+        if results and not dry_run and getattr(self.config, "trading_enabled", False):
+            try:
+                from src.trading.execution import get_trading_engine
+                engine = get_trading_engine()
+                engine.run(results, source_date=date.today())
+            except Exception as e:
+                logger.warning(f"交易信号生成失败（已忽略）: {e}")
         
         return results
     

@@ -385,6 +385,37 @@ class ApiHandler:
         
         return JsonResponse({"success": True, "task": task})
 
+    def handle_trading_signals(self, query: Dict[str, list]) -> Response:
+        """
+        获取最新交易信号 GET /api/trading/signals
+        
+        供国信 iQuant 策略拉取买入/加仓信号，再在客户端内用 passorder 下单。
+        仅当 TRADING_ENABLED=true 时返回有效数据，否则返回 403。
+        """
+        from src.config import get_config
+        from src.trading.execution import get_trading_engine
+
+        cfg = get_config()
+        if not getattr(cfg, "trading_enabled", False):
+            return JsonResponse(
+                {
+                    "success": False,
+                    "error": "自动交易未启用",
+                    "code": "TRADING_DISABLED",
+                    "signals": [],
+                },
+                status=HTTPStatus.FORBIDDEN
+            )
+
+        engine = get_trading_engine()
+        data = engine.load_latest_signals()
+        return JsonResponse({
+            "success": True,
+            "updated_at": data.get("updated_at"),
+            "count": data.get("count", 0),
+            "signals": data.get("signals", []),
+        })
+
 
 # ============================================================
 # Bot Webhook 处理器

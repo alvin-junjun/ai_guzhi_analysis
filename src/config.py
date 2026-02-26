@@ -244,6 +244,24 @@ class Config:
     
     # Discord 机器人扩展配置
     discord_bot_status: str = "A股智能分析 | /help"  # 机器人状态信息
+
+    # === 自动交易 / 国信 iQuant 配置 ===
+    # 是否启用自动交易相关功能（信号生成、API 暴露）；实盘下单需在 iQuant 客户端内运行策略
+    trading_enabled: bool = False
+    # 是否仅模拟（只记录信号不真实下单，本应用侧仅生成并暴露信号）
+    auto_trade_dry_run: bool = True
+    # QMT/国信 iQuant 平台登录账号（在 iQuant 客户端登录用，此处仅作配置预留）
+    qmt_login_account: Optional[str] = None
+    # QMT/国信 iQuant 平台登录密码（在 iQuant 客户端登录用，此处仅作配置预留）
+    qmt_login_password: Optional[str] = None
+    # 国信资金账号/股东账号（用于 iQuant 策略内 ContextInfo.set_account，下单时使用）
+    broker_stock_account: Optional[str] = None
+    # 国信交易密码（若 iQuant 需在策略中传入则在此配置，否则在客户端输入）
+    broker_trade_password: Optional[str] = None
+    # 单笔买入最大金额（元），0 表示不限制
+    trading_max_order_amount: float = 0.0
+    # 单日买入总金额上限（元），0 表示不限制
+    trading_daily_max_buy_amount: float = 0.0
     
     # 单例实例存储
     _instance: Optional['Config'] = None
@@ -469,7 +487,16 @@ class Config:
             # - tushare: Tushare Pro，需要2000积分，数据全面
             realtime_source_priority=os.getenv('REALTIME_SOURCE_PRIORITY', 'tencent,akshare_sina,efinance,akshare_em'),
             realtime_cache_ttl=int(os.getenv('REALTIME_CACHE_TTL', '600')),
-            circuit_breaker_cooldown=int(os.getenv('CIRCUIT_BREAKER_COOLDOWN', '300'))
+            circuit_breaker_cooldown=int(os.getenv('CIRCUIT_BREAKER_COOLDOWN', '300')),
+            # 自动交易 / 国信 iQuant
+            trading_enabled=os.getenv('TRADING_ENABLED', 'false').lower() == 'true',
+            auto_trade_dry_run=os.getenv('AUTO_TRADE_DRY_RUN', 'true').lower() == 'true',
+            qmt_login_account=os.getenv('QMT_LOGIN_ACCOUNT') or None,
+            qmt_login_password=os.getenv('QMT_LOGIN_PASSWORD') or None,
+            broker_stock_account=os.getenv('BROKER_STOCK_ACCOUNT') or None,
+            broker_trade_password=os.getenv('BROKER_TRADE_PASSWORD') or None,
+            trading_max_order_amount=float(os.getenv('TRADING_MAX_ORDER_AMOUNT', '0')),
+            trading_daily_max_buy_amount=float(os.getenv('TRADING_DAILY_MAX_BUY_AMOUNT', '0')),
         )
     
     @classmethod
