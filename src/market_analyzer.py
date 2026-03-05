@@ -68,8 +68,8 @@ class MarketOverview:
     limit_up_count: int = 0             # 涨停家数
     limit_down_count: int = 0           # 跌停家数
     total_amount: float = 0.0           # 两市成交额（亿元）
-    # north_flow: float = 0.0           # 北向资金净流入（亿元）- 已废弃，接口不可用
-    
+    north_flow: Optional[float] = None  # 北向资金当日净流入（亿元），正为净买入；None 表示未获取到
+
     # 板块涨幅榜
     top_sectors: List[Dict] = field(default_factory=list)     # 涨幅前5板块
     bottom_sectors: List[Dict] = field(default_factory=list)  # 跌幅前5板块
@@ -118,10 +118,10 @@ class MarketAnalyzer:
         
         # 3. 获取板块涨跌榜
         self._get_sector_rankings(overview)
-        
-        # 4. 获取北向资金（可选）
-        # self._get_north_flow(overview)
-        
+
+        # 4. 获取北向资金（沪股通+深股通净流入）
+        self._get_north_flow(overview)
+
         return overview
 
     
@@ -202,28 +202,20 @@ class MarketAnalyzer:
 
         except Exception as e:
             logger.error(f"[大盘] 获取板块涨跌榜失败: {e}")
-    
-    # def _get_north_flow(self, overview: MarketOverview):
-    #     """获取北向资金流入"""
-    #     try:
-    #         logger.info("[大盘] 获取北向资金...")
-            
-    #         # 获取北向资金数据
-    #         df = ak.stock_hsgt_north_net_flow_in_em(symbol="北上")
-            
-    #         if df is not None and not df.empty:
-    #             # 取最新一条数据
-    #             latest = df.iloc[-1]
-    #             if '当日净流入' in df.columns:
-    #                 overview.north_flow = float(latest['当日净流入']) / 1e8  # 转为亿元
-    #             elif '净流入' in df.columns:
-    #                 overview.north_flow = float(latest['净流入']) / 1e8
-                    
-    #             logger.info(f"[大盘] 北向资金净流入: {overview.north_flow:.2f}亿")
-                
-    #     except Exception as e:
-    #         logger.warning(f"[大盘] 获取北向资金失败: {e}")
-    
+
+    def _get_north_flow(self, overview: MarketOverview) -> None:
+        """获取北向资金当日净流入（通过 DataFetcherManager，支持多数据源切换）"""
+        try:
+            logger.info("[大盘] 获取北向资金...")
+            data = self.data_manager.get_north_flow()
+            if data is not None and "north_flow" in data:
+                overview.north_flow = float(data["north_flow"])
+                logger.info(f"[大盘] 北向资金净流入: {overview.north_flow:.2f}亿 (日期: {data.get('date', '')})")
+            else:
+                logger.debug("[大盘] 北向资金数据未获取到，可能接口无数据或暂不可用")
+        except Exception as e:
+            logger.warning(f"[大盘] 获取北向资金失败: {e}")
+
     def search_market_news(self) -> List[Dict]:
         """
         搜索市场新闻
@@ -363,6 +355,7 @@ class MarketAnalyzer:
 - 上涨: {overview.up_count} 家 | 下跌: {overview.down_count} 家 | 平盘: {overview.flat_count} 家
 - 涨停: {overview.limit_up_count} 家 | 跌停: {overview.limit_down_count} 家
 - 两市成交额: {overview.total_amount:.0f} 亿元
+{f'- 北向资金净流入: {overview.north_flow:+.2f} 亿元（正为净买入）' if overview.north_flow is not None else ''}
 
 ## 板块表现
 领涨: {top_sectors_text if top_sectors_text else "暂无数据"}
@@ -446,6 +439,7 @@ class MarketAnalyzer:
 | 涨停 | {overview.limit_up_count} |
 | 跌停 | {overview.limit_down_count} |
 | 两市成交额 | {overview.total_amount:.0f}亿 |
+{chr(10) + '| 北向资金净流入 | ' + f'{overview.north_flow:+.2f}亿 |' if overview.north_flow is not None else ''}
 
 ### 四、板块表现
 - **领涨**: {top_text}

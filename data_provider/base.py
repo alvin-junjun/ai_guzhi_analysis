@@ -138,6 +138,18 @@ class BaseFetcher(ABC):
         """
         return None
 
+    def get_north_flow(self) -> Optional[Dict[str, Any]]:
+        """
+        获取北向资金（沪股通+深股通）净流入数据
+
+        Returns:
+            Dict 包含:
+                - north_flow: 当日净流入（亿元），正数为净买入
+                - date: 数据日期 YYYY-MM-DD
+                - cumulative_net: 历史累计净买额（万亿元，可选）
+        """
+        return None
+
     def get_daily_data(
         self,
         stock_code: str, 
@@ -807,3 +819,16 @@ class DataFetcherManager:
                 logger.warning(f"[{fetcher.name}] 获取板块排行失败: {e}")
                 continue
         return [], []
+
+    def get_north_flow(self) -> Optional[Dict[str, Any]]:
+        """获取北向资金净流入（自动切换数据源）"""
+        for fetcher in self._fetchers:
+            try:
+                data = fetcher.get_north_flow()
+                if data is not None:
+                    logger.info(f"[{fetcher.name}] 获取北向资金成功")
+                    return data
+            except Exception as e:
+                logger.warning(f"[{fetcher.name}] 获取北向资金失败: {e}")
+                continue
+        return None

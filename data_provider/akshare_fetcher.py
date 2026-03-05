@@ -1199,10 +1199,13 @@ class AkshareFetcher(BaseFetcher):
         """
         获取筹码分布数据
         
-        数据来源：ak.stock_cyq_em()
+        数据来源：ak.stock_cyq_em()（东方财富）
         包含：获利比例、平均成本、筹码集中度
         
-        注意：ETF/指数没有筹码分布数据，会直接返回 None
+        注意：
+        - ETF/指数没有筹码分布数据，会直接返回 None
+        - 该接口易出现 RemoteDisconnected/Connection aborted（东方财富主动断连），
+          内部已做最多 3 次重试；若仍失败可关闭配置 enable_chip_distribution
         
         Args:
             stock_code: 股票代码
@@ -1222,19 +1225,43 @@ class AkshareFetcher(BaseFetcher):
             logger.debug(f"[API跳过] {stock_code} 是 ETF/指数，无筹码分布数据")
             return None
         
+        # 东方财富筹码接口易出现 RemoteDisconnected/Connection aborted，做有限次重试
+        max_attempts = 3
+        df = None
+        api_elapsed = 0.0
+        for attempt in range(1, max_attempts + 1):
+            try:
+                # 防封禁策略
+                self._set_random_user_agent()
+                self._enforce_rate_limit()
+                
+                logger.info(f"[API调用] ak.stock_cyq_em(symbol={stock_code}) 获取筹码分布... (attempt {attempt}/{max_attempts})")
+                import time as _time
+                api_start = _time.time()
+                
+                df = ak.stock_cyq_em(symbol=stock_code)
+                api_elapsed = _time.time() - api_start
+                break
+            except Exception as e:
+                err_msg = str(e).lower()
+                # 仅对“连接被远端关闭/中断”类错误重试
+                is_retryable = (
+                    "remotedisconnected" in err_msg
+                    or "connection aborted" in err_msg
+                    or "connection reset" in err_msg
+                    or isinstance(e, (ConnectionError, TimeoutError, OSError))
+                )
+                if is_retryable and attempt < max_attempts:
+                    wait = min(2 ** attempt, 10)
+                    logger.warning(f"[API错误] 获取 {stock_code} 筹码分布失败 (attempt {attempt}/{max_attempts}): {e}，{wait}s 后重试")
+                    time.sleep(wait)
+                else:
+                    logger.error(f"[API错误] 获取 {stock_code} 筹码分布失败: {e}")
+                    return None
+        
+        if df is None:
+            return None
         try:
-            # 防封禁策略
-            self._set_random_user_agent()
-            self._enforce_rate_limit()
-            
-            logger.info(f"[API调用] ak.stock_cyq_em(symbol={stock_code}) 获取筹码分布...")
-            import time as _time
-            api_start = _time.time()
-            
-            df = ak.stock_cyq_em(symbol=stock_code)
-            
-            api_elapsed = _time.time() - api_start
-            
             if df.empty:
                 logger.warning(f"[API返回] ak.stock_cyq_em 返回空数据, 耗时 {api_elapsed:.2f}s")
                 return None
@@ -1442,6 +1469,85 @@ class AkshareFetcher(BaseFetcher):
 
         except Exception as e:
             logger.error(f"[Akshare] 获取板块排行失败: {e}")
+            return None
+
+    def get_north_flow(self) -> Optional[Dict[str, Any]]:
+        """
+        获取北向资金（沪股通+深股通）当日净流入
+        数据来源：东方财富 stock_hsgt_hist_em；优先 symbol="北向资金"，不可用时用沪股通+深股通合并
+        注：2024年8月后披露机制调整，部分日期可能无单日数据，取最近一条有效数据。
+        """
+        import akshare as ak
+        try:
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+
+            df = None
+            # 优先使用「北向资金」；部分 akshare 版本无此 key，改用沪股通+深股通
+            try:
+                df = ak.stock_hsgt_hist_em(symbol="北向资金")
+            except (KeyError, Exception):
+                df_h = ak.stock_hsgt_hist_em(symbol="沪股通")
+                df_s = ak.stock_hsgt_hist_em(symbol="深股通")
+                if df_h is not None and not df_h.empty and df_s is not None and not df_s.empty:
+                    col_net = col_date = None
+                    for c_net, c_date in [("当日成交净买额", "日期"), ("NET_DEAL_AMT", "TRADE_DATE")]:
+                        if c_net in df_h.columns and c_net in df_s.columns and c_date in df_h.columns and c_date in df_s.columns:
+                            col_net, col_date = c_net, c_date
+                            break
+                    if col_net and col_date:
+                        df_h[c_date] = pd.to_datetime(df_h[c_date], errors="coerce").dt.strftime("%Y-%m-%d")
+                        df_s[c_date] = pd.to_datetime(df_s[c_date], errors="coerce").dt.strftime("%Y-%m-%d")
+                        common = set(df_h[c_date].dropna()) & set(df_s[c_date].dropna())
+                        if common:
+                            last_date = max(common)
+                            row_h = df_h[df_h[c_date] == last_date].iloc[-1]
+                            row_s = df_s[df_s[c_date] == last_date].iloc[-1]
+                            net_h = float(pd.to_numeric(row_h[col_net], errors="coerce") or 0)
+                            net_s = float(pd.to_numeric(row_s[col_net], errors="coerce") or 0)
+                            return {"north_flow": net_h + net_s, "date": last_date}
+                df = None
+
+            if df is None or df.empty:
+                return None
+
+            # 取最新一条（按日期排序后最后一行）
+            if "日期" in df.columns:
+                df = df.sort_values("日期", ascending=True).reset_index(drop=True)
+            latest = df.iloc[-1]
+
+            # 当日成交净买额，单位已是亿元（兼容中英文列名）
+            flow_col = None
+            for col in ("当日成交净买额", "NET_DEAL_AMT", "净流入", "当日净流入"):
+                if col in df.columns:
+                    flow_col = col
+                    break
+            if flow_col is None:
+                return None
+
+            north_flow = float(pd.to_numeric(latest[flow_col], errors="coerce"))
+            if pd.isna(north_flow):
+                return None
+
+            # 日期（兼容 日期 / TRADE_DATE）
+            date_val = latest.get("日期", latest.get("TRADE_DATE", ""))
+            if hasattr(date_val, "strftime"):
+                date_str = date_val.strftime("%Y-%m-%d")
+            else:
+                date_str = str(date_val)[:10] if date_val else ""
+
+            result = {"north_flow": north_flow, "date": date_str}
+
+            # 历史累计净买额（万亿元），可选
+            if "历史累计净买额" in df.columns:
+                cum = pd.to_numeric(latest["历史累计净买额"], errors="coerce")
+                if not pd.isna(cum):
+                    result["cumulative_net"] = float(cum)
+
+            return result
+
+        except Exception as e:
+            logger.warning(f"[Akshare] 获取北向资金失败: {e}")
             return None
 
 
