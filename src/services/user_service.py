@@ -264,6 +264,7 @@ class UserService:
         self,
         user_id: int,
         stock_code: str = None,
+        source_type: str = None,
         limit: int = 50,
         offset: int = 0
     ) -> List[Dict[str, Any]]:
@@ -273,6 +274,7 @@ class UserService:
         Args:
             user_id: 用户 ID
             stock_code: 股票代码（可选）
+            source_type: 来源类型筛选（可选）direct / url_crawl / prompt_crawl
             limit: 返回数量限制
             offset: 偏移量
             
@@ -284,6 +286,8 @@ class UserService:
             
             if stock_code:
                 query = query.where(AnalysisHistory.stock_code == stock_code)
+            if source_type:
+                query = query.where(AnalysisHistory.source_type == source_type)
             
             query = query.order_by(AnalysisHistory.created_at.desc())
             query = query.limit(limit).offset(offset)
@@ -302,7 +306,9 @@ class UserService:
         ai_summary: str = None,
         score: int = None,
         sentiment: str = None,
-        task_id: str = None
+        task_id: str = None,
+        source_type: str = 'direct',
+        source_ref: str = None
     ) -> int:
         """
         保存分析历史
@@ -318,6 +324,8 @@ class UserService:
             score: 评分
             sentiment: 情绪判断
             task_id: 关联任务 ID
+            source_type: 来源类型 direct / url_crawl / prompt_crawl
+            source_ref: 来源引用（如 URL 或「自定义提示词」）
             
         Returns:
             历史记录 ID
@@ -332,6 +340,8 @@ class UserService:
                 ai_summary=ai_summary,
                 score=score,
                 sentiment=sentiment,
+                source_type=source_type or 'direct',
+                source_ref=source_ref,
             )
             
             if market_data:

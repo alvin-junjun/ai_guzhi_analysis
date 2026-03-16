@@ -308,6 +308,8 @@ CREATE TABLE `analysis_history` (
     `ai_summary` TEXT DEFAULT NULL COMMENT 'AI 分析摘要',
     `score` INT DEFAULT NULL COMMENT '分析评分',
     `sentiment` ENUM('bullish', 'neutral', 'bearish') DEFAULT NULL COMMENT '情绪判断',
+    `source_type` VARCHAR(20) NOT NULL DEFAULT 'direct' COMMENT '分析来源: direct/url_crawl/prompt_crawl',
+    `source_ref` TEXT DEFAULT NULL COMMENT '来源引用，如文章URL或自定义提示词',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     PRIMARY KEY (`id`),
     INDEX `ix_user_id` (`user_id`),

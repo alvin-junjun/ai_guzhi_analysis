@@ -277,26 +277,44 @@ class MarketAnalyzer:
         
         # 构建 Prompt
         prompt = self._build_review_prompt(overview, news)
+        generation_config = {
+            'temperature': 0.7,
+            'max_output_tokens': 2048,
+        }
+        # 模型调用详情日志：输入
+        prompt_preview = prompt[:800] + "..." if len(prompt) > 800 else prompt
+        logger.info(
+            "[LLM调用/大盘复盘] 输入: prompt_len=%d, temperature=%s, max_output_tokens=%s",
+            len(prompt), generation_config['temperature'], generation_config['max_output_tokens'],
+        )
+        logger.info("[LLM调用/大盘复盘] prompt 预览: %s", prompt_preview)
+        logger.debug("[LLM调用/大盘复盘] 完整 prompt: %s", prompt)
         
         try:
             logger.info("[大盘] 调用大模型生成复盘报告...")
             
-            generation_config = {
-                'temperature': 0.7,
-                'max_output_tokens': 2048,
-            }
-            
             # 根据 analyzer 使用的 API 类型调用
             if self.analyzer._use_openai:
-                # 使用 OpenAI 兼容 API
+                # 使用 OpenAI 兼容 API（内部会打请求/响应日志）
                 review = self.analyzer._call_openai_api(prompt, generation_config)
             else:
                 # 使用 Gemini API
+                t0 = time.time()
                 response = self.analyzer._model.generate_content(
                     prompt,
                     generation_config=generation_config,
                 )
+                elapsed = time.time() - t0
                 review = response.text.strip() if response and response.text else None
+                if review is not None:
+                    out_preview = review[:800] + "..." if len(review) > 800 else review
+                    logger.info(
+                        "[LLM调用/大盘复盘] 输出: 耗时=%.2fs, 长度=%d, 预览: %s",
+                        elapsed, len(review), out_preview,
+                    )
+                    logger.debug("[LLM调用/大盘复盘] 完整响应: %s", review)
+                else:
+                    logger.warning("[LLM调用/大盘复盘] 输出: 耗时=%.2fs, 响应为空", elapsed)
             
             if review:
                 logger.info(f"[大盘] 复盘报告生成成功，长度: {len(review)} 字符")

@@ -187,7 +187,7 @@ class PageHandler:
         self.config_service = get_config_service()
     
     def handle_index(self, headers: dict = None) -> Response:
-        """处理首页请求 GET /。传入 headers 时做服务端鉴权并直出导航栏，避免登录后首屏仍显示未登录。"""
+        """处理首页请求 GET /。始终做服务端鉴权并直出导航栏，避免首屏一直显示「加载中」。"""
         nav_ssr = None
         if headers:
             from web.auth import get_auth_middleware
@@ -204,6 +204,9 @@ class PageHandler:
                     'level_text': level_text or '免费版',
                     'is_vip': benefits.get('level') == 'vip',
                 }
+            else:
+                # 未登录时也直出「未登录」+ 登录/注册链接，避免一直显示加载中
+                nav_ssr = {'unauthenticated': True}
         body = render_config_page(nav_ssr=nav_ssr)
         return HtmlResponse(body)
     
@@ -384,6 +387,152 @@ class ApiHandler:
             )
         
         return JsonResponse({"success": True, "task": task})
+
+    def handle_article_extract(self, form_data: Dict[str, list], headers: Dict[str, str] = None) -> Response:
+        """
+        从文章 URL 或提示词抓取股票并提交分析 POST /api/article-extract
+        
+        会员与次数限制：与「输入股票代码分析」完全一致——先校验登录，再按会员等级校验今日分析次数，
+        超出时返回 LIMIT_EXCEEDED 与 redirect=/membership。每次提交的多只股票会按只数扣减次数。
+        
+        参数: mode=url|prompt, url=xxx（mode=url 时必填）, content=xxx（mode=prompt 时必填）,
+             report_type=simple|full, top_n=5（1-10）
+        返回: { success, task_ids, source_type, message }
+        """
+        headers = headers or {}
+        logger.info("[article-extract] 收到请求 path=/api/article-extract")
+        from web.auth import get_auth_middleware
+        middleware = get_auth_middleware()
+        context = middleware.authenticate(headers)
+        if not context.is_authenticated:
+            return JsonResponse(
+                {"success": False, "error": "请先登录", "code": "UNAUTHORIZED", "redirect": "/login"},
+                status=HTTPStatus.UNAUTHORIZED
+            )
+        # 与股票代码分析同一套限制逻辑：按会员等级做今日次数限制
+        can_continue, msg = middleware.check_analysis_limit(context)
+        if not can_continue:
+            return JsonResponse(
+                {"success": False, "error": msg, "code": "LIMIT_EXCEEDED", "redirect": "/membership"},
+                status=HTTPStatus.FORBIDDEN
+            )
+
+        def _first(key: str, default: str = "") -> str:
+            return (form_data.get(key) or [default])[0].strip() if form_data else default
+
+        mode = _first("mode", "url")
+        if mode not in ("url", "prompt"):
+            mode = "url"
+        report_type_str = _first("report_type", "simple")
+        report_type = ReportType.from_str(report_type_str)
+        try:
+            top_n = min(max(int(_first("top_n", "5") or "5"), 1), 10)
+        except (ValueError, TypeError):
+            top_n = 5
+
+        key_content = None
+        source_type = "url_crawl"
+        source_ref = ""
+
+        if mode == "url":
+            url = _first("url")
+            if not url:
+                return JsonResponse(
+                    {"success": False, "error": "请输入文章 URL"},
+                    status=HTTPStatus.BAD_REQUEST
+                )
+            if not url.startswith("http"):
+                url = "https://" + url
+            source_ref = url
+            try:
+                from src.article_crawl import fetch_article, extract_key_content, get_article_crawl_config
+                config = get_article_crawl_config()
+                timeout_sec = config.get("timeout", 60)
+                title, body = fetch_article(url, timeout=timeout_sec)
+                max_len = config.get("max_content_length", 12000)
+                key_content = extract_key_content(title, body, max_length=max_len)
+            except Exception as e:
+                logger.exception("抓取文章失败: %s", e)
+                return JsonResponse(
+                    {"success": False, "error": "抓取文章失败，请检查 URL 或网络。若为微信文章，可能需在浏览器中打开验证后再试。"},
+                    status=HTTPStatus.BAD_REQUEST
+                )
+        else:
+            content = _first("content")
+            if not content:
+                return JsonResponse(
+                    {"success": False, "error": "请输入提示词内容"},
+                    status=HTTPStatus.BAD_REQUEST
+                )
+            source_type = "prompt_crawl"
+            source_ref = "自定义提示词"
+            from src.config import get_config
+            cfg = get_config()
+            max_len = getattr(cfg, "article_crawl_max_content_length", 12000)
+            key_content = content if len(content) <= max_len else content[:max_len] + "\n\n[已截断]"
+
+        logger.info(
+            "[article-extract] 开始多模型分析 mode=%s source_type=%s content_len=%s top_n=%s",
+            mode, source_type, len(key_content or ""), top_n
+        )
+        try:
+            from src.article_crawl import extract_stocks_from_content, has_any_analyzer_configured, get_article_crawl_config
+            stocks = extract_stocks_from_content(key_content, top_n=top_n)
+        except Exception as e:
+            logger.exception("多模型分析失败: %s", e)
+            return JsonResponse(
+                {"success": False, "error": "分析失败: " + str(e)},
+                status=HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+
+        if not stocks:
+            cfg = get_article_crawl_config()
+            has_analyzer = has_any_analyzer_configured(cfg)
+            logger.info(
+                "[article-extract] 未解析出股票 stocks=[] 已配置分析器=%s",
+                has_analyzer
+            )
+            if not has_analyzer:
+                return JsonResponse(
+                    {
+                        "success": False,
+                        "error": "未配置「文章/提示词 → 股票」分析用的 AI。请先配置至少一个：DeepSeek、通义千问、豆包或扣子（.env 或 ARTICLE_CRAWL_YAML_PATH 指定的 YAML），再试。",
+                    },
+                    status=HTTPStatus.BAD_REQUEST
+                )
+            return JsonResponse(
+                {"success": True, "task_ids": [], "source_type": source_type, "message": "未解析出符合条件的股票，请尝试更换 URL 或提示词。"}
+            )
+
+        logger.info(
+            "[article-extract] 解析出 %s 只股票 codes=%s",
+            len(stocks), [s.get("code") for s in stocks]
+        )
+
+        task_ids = []
+        for item in stocks:
+            code = (item.get("code") or "").strip()
+            if not code or len(code) != 6:
+                continue
+            try:
+                result = self.analysis_service.submit_analysis(
+                    code,
+                    report_type=report_type,
+                    user_id=context.user_id,
+                    source_type=source_type,
+                    source_ref=source_ref or None,
+                )
+                if result.get("success") and result.get("task_id"):
+                    task_ids.append(result["task_id"])
+            except Exception as e:
+                logger.warning("提交股票 %s 分析失败: %s", code, e)
+
+        return JsonResponse({
+            "success": True,
+            "task_ids": task_ids,
+            "source_type": source_type,
+            "message": f"已提交 {len(task_ids)} 只股票分析，请在下方面务列表中查看进度。",
+        })
 
     def handle_trading_signals(self, query: Dict[str, list]) -> Response:
         """

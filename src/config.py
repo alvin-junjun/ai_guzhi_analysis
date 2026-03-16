@@ -57,6 +57,7 @@ class Config:
     gemini_request_delay: float = 2.0  # 请求间隔（秒）
     gemini_max_retries: int = 5  # 最大重试次数
     gemini_retry_delay: float = 5.0  # 重试基础延时（秒）
+    llm_request_timeout: int = 120  # 单次 LLM 请求超时（秒），超时后重试或跳过，避免无限卡住
 
     # OpenAI 兼容 API（备选，当 Gemini 不可用时使用）
     openai_api_key: Optional[str] = None
@@ -160,6 +161,8 @@ class Config:
     enable_realtime_quote: bool = True
     # 筹码分布开关（该接口不稳定，云端部署建议关闭）
     enable_chip_distribution: bool = True
+    # 筹码分布接口超时（秒），超时则跳过该数据继续分析，避免卡死
+    chip_distribution_timeout: int = 25
     # 实时行情数据源优先级（逗号分隔）
     # 推荐顺序：tencent > akshare_sina > efinance > akshare_em > tushare
     # - tencent: 腾讯财经，有量比/换手率/市盈率等，单股查询稳定（推荐）
@@ -262,6 +265,32 @@ class Config:
     trading_max_order_amount: float = 10000.0
     # 单日买入总金额上限（元），0 表示不限制
     trading_daily_max_buy_amount: float = 20000.0
+
+    # === 文章/提示词抓取股票（多模型分析）配置 ===
+    # 可选：YAML 配置文件路径，若存在则优先从 YAML 加载（格式同 jiangyan_guzhi 的 config.yaml）
+    article_crawl_yaml_path: Optional[str] = None
+    # 以下为未使用 YAML 时的 env 回退（与 jiangyan_guzhi config.example.yaml 对应）
+    article_crawl_timeout: int = 60
+    article_crawl_max_content_length: int = 12000
+    # DeepSeek
+    article_crawl_deepseek_enabled: bool = False
+    article_crawl_deepseek_api_key: Optional[str] = None
+    article_crawl_deepseek_base_url: str = "https://api.deepseek.com"
+    article_crawl_deepseek_model: str = "deepseek-chat"
+    # 通义千问
+    article_crawl_tongyi_enabled: bool = False
+    article_crawl_tongyi_api_key: Optional[str] = None
+    article_crawl_tongyi_model: str = "qwen-plus"
+    # 豆包（火山方舟）
+    article_crawl_doubao_enabled: bool = False
+    article_crawl_doubao_api_key: Optional[str] = None
+    article_crawl_doubao_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
+    article_crawl_doubao_model: Optional[str] = None
+    # 扣子 Coze
+    article_crawl_coze_enabled: bool = False
+    article_crawl_coze_api_key: Optional[str] = None
+    article_crawl_coze_bot_id: Optional[str] = None
+    article_crawl_coze_base_url: str = "https://api.coze.cn"
 
     # 单例实例存储
     _instance: Optional['Config'] = None
@@ -380,6 +409,7 @@ class Config:
             gemini_request_delay=float(os.getenv('GEMINI_REQUEST_DELAY', '2.0')),
             gemini_max_retries=int(os.getenv('GEMINI_MAX_RETRIES', '5')),
             gemini_retry_delay=float(os.getenv('GEMINI_RETRY_DELAY', '5.0')),
+            llm_request_timeout=int(os.getenv('LLM_REQUEST_TIMEOUT', '120')),
             openai_api_key=os.getenv('OPENAI_API_KEY'),
             openai_base_url=os.getenv('OPENAI_BASE_URL'),
             openai_model=os.getenv('OPENAI_MODEL', 'gpt-4o-mini'),
@@ -480,6 +510,7 @@ class Config:
             # 实时行情增强数据配置
             enable_realtime_quote=os.getenv('ENABLE_REALTIME_QUOTE', 'true').lower() == 'true',
             enable_chip_distribution=os.getenv('ENABLE_CHIP_DISTRIBUTION', 'true').lower() == 'true',
+            chip_distribution_timeout=int(os.getenv('CHIP_DISTRIBUTION_TIMEOUT', '25')),
             # 实时行情数据源优先级：
             # - tencent: 腾讯财经，有量比/换手率/PE/PB等，单股查询稳定（推荐）
             # - akshare_sina: 新浪财经，基本行情稳定，但无量比
@@ -497,6 +528,25 @@ class Config:
             broker_trade_password=os.getenv('BROKER_TRADE_PASSWORD') or None,
             trading_max_order_amount=float(os.getenv('TRADING_MAX_ORDER_AMOUNT', '0')),
             trading_daily_max_buy_amount=float(os.getenv('TRADING_DAILY_MAX_BUY_AMOUNT', '0')),
+            # 文章/提示词抓取（与 jiangyan_guzhi config.example.yaml 对应）
+            article_crawl_yaml_path=os.getenv('ARTICLE_CRAWL_YAML_PATH') or None,
+            article_crawl_timeout=int(os.getenv('ARTICLE_CRAWL_TIMEOUT', '60')),
+            article_crawl_max_content_length=int(os.getenv('ARTICLE_CRAWL_MAX_CONTENT_LENGTH', '12000')),
+            article_crawl_deepseek_enabled=os.getenv('ARTICLE_CRAWL_DEEPSEEK_ENABLED', 'false').lower() == 'true',
+            article_crawl_deepseek_api_key=os.getenv('ARTICLE_CRAWL_DEEPSEEK_API_KEY'),
+            article_crawl_deepseek_base_url=os.getenv('ARTICLE_CRAWL_DEEPSEEK_BASE_URL', 'https://api.deepseek.com'),
+            article_crawl_deepseek_model=os.getenv('ARTICLE_CRAWL_DEEPSEEK_MODEL', 'deepseek-chat'),
+            article_crawl_tongyi_enabled=os.getenv('ARTICLE_CRAWL_TONGYI_ENABLED', 'false').lower() == 'true',
+            article_crawl_tongyi_api_key=os.getenv('ARTICLE_CRAWL_TONGYI_API_KEY'),
+            article_crawl_tongyi_model=os.getenv('ARTICLE_CRAWL_TONGYI_MODEL', 'qwen-plus'),
+            article_crawl_doubao_enabled=os.getenv('ARTICLE_CRAWL_DOUBAO_ENABLED', 'false').lower() == 'true',
+            article_crawl_doubao_api_key=os.getenv('ARTICLE_CRAWL_DOUBAO_API_KEY'),
+            article_crawl_doubao_base_url=os.getenv('ARTICLE_CRAWL_DOUBAO_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3'),
+            article_crawl_doubao_model=os.getenv('ARTICLE_CRAWL_DOUBAO_MODEL') or None,
+            article_crawl_coze_enabled=os.getenv('ARTICLE_CRAWL_COZE_ENABLED', 'false').lower() == 'true',
+            article_crawl_coze_api_key=os.getenv('ARTICLE_CRAWL_COZE_API_KEY'),
+            article_crawl_coze_bot_id=os.getenv('ARTICLE_CRAWL_COZE_BOT_ID') or None,
+            article_crawl_coze_base_url=os.getenv('ARTICLE_CRAWL_COZE_BASE_URL', 'https://api.coze.cn'),
         )
 
     @classmethod

@@ -1225,6 +1225,15 @@ def render_history_page() -> bytes:
         <a href="/" class="back-link">← 返回首页</a>
         <a href="/user" class="back-link" style="margin-left: 12px;">个人中心</a>
         <h1 class="page-title">📋 历史分析记录</h1>
+        <div style="margin-bottom: 16px;">
+            <label style="margin-right: 8px;">来源筛选：</label>
+            <select id="history_source_filter" style="padding: 6px 10px; border-radius: 6px; border: 1px solid #e2e8f0;">
+                <option value="">全部</option>
+                <option value="direct">直接录入</option>
+                <option value="url_crawl">URL 抓取</option>
+                <option value="prompt_crawl">提示词抓取</option>
+            </select>
+        </div>
         <div id="history_content">
             <div class="history-loading">加载中...</div>
         </div>
@@ -1236,10 +1245,19 @@ def render_history_page() -> bytes:
                 return t ? {{ 'Authorization': 'Bearer ' + t }} : {{}};
             }} catch (e) {{ return {{}}; }}
         }}
+        function getSourceTypeLabel(st) {{
+            if (st === 'url_crawl') return 'URL抓取';
+            if (st === 'prompt_crawl') return '提示词';
+            return '直接录入';
+        }}
         async function loadHistory() {{
             const el = document.getElementById('history_content');
+            const filter = document.getElementById('history_source_filter');
+            const sourceType = filter ? filter.value : '';
+            let url = '/api/user/analysis-history?limit=100';
+            if (sourceType) url += '&source_type=' + encodeURIComponent(sourceType);
             try {{
-                const res = await fetch('/api/user/analysis-history?limit=100', {{ credentials: 'include', headers: getAuthHeaders() }});
+                const res = await fetch(url, {{ credentials: 'include', headers: getAuthHeaders() }});
                 const data = await res.json();
                 if (!data.success) {{
                     el.innerHTML = '<div class="history-empty">' + (data.error || '加载失败') + '，<a href="/login">请先登录</a></div>';
@@ -1250,7 +1268,7 @@ def render_history_page() -> bytes:
                     el.innerHTML = '<div class="history-empty">暂无分析记录，去首页发起分析吧 ~</div>';
                     return;
                 }}
-                let rows = '<table class="history-table"><thead><tr><th class="col-date">分析日期</th><th class="col-code">股票代码</th><th class="col-name">股票名称</th><th>AI 摘要</th><th>创建时间</th></tr></thead><tbody>';
+                let rows = '<table class="history-table"><thead><tr><th class="col-date">分析日期</th><th class="col-code">股票代码</th><th class="col-name">股票名称</th><th style="width:90px;">来源</th><th>AI 摘要</th><th>创建时间</th></tr></thead><tbody>';
                 for (const item of list) {{
                     const date = item.analysis_date || '-';
                     const code = item.stock_code || '-';
@@ -1259,7 +1277,8 @@ def render_history_page() -> bytes:
                     const created = (item.created_at || '-').replace('T', ' ');
                     const sentiment = item.sentiment || '';
                     const sc = sentiment === 'bullish' ? 'sentiment-bullish' : (sentiment === 'bearish' ? 'sentiment-bearish' : 'sentiment-neutral');
-                    rows += '<tr><td>' + date + '</td><td>' + code + '</td><td class="' + sc + '">' + name + '</td><td class="col-summary" title="' + (item.ai_summary || '').replace(/"/g, '&quot;') + '">' + summary + '</td><td>' + created + '</td></tr>';
+                    const sourceLabel = getSourceTypeLabel(item.source_type || 'direct');
+                    rows += '<tr><td>' + date + '</td><td>' + code + '</td><td class="' + sc + '">' + name + '</td><td>' + sourceLabel + '</td><td class="col-summary" title="' + (item.ai_summary || '').replace(/"/g, '&quot;') + '">' + summary + '</td><td>' + created + '</td></tr>';
                 }}
                 rows += '</tbody></table>';
                 el.innerHTML = rows;
@@ -1268,6 +1287,8 @@ def render_history_page() -> bytes:
             }}
         }}
         loadHistory();
+        var histFilter = document.getElementById('history_source_filter');
+        if (histFilter) histFilter.addEventListener('change', loadHistory);
     </script>
 </body>
 </html>'''

@@ -13,8 +13,9 @@ A股自选股智能分析系统 - AI分析层
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable, TypeVar
 
 from tenacity import (
     retry,
@@ -27,6 +28,21 @@ from tenacity import (
 from src.config import get_config
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+
+def _run_with_timeout(func: Callable[[], T], timeout_seconds: int, label: str = "LLM") -> T:
+    """在单独线程中执行 func，超时则抛出异常，避免 SDK 无响应导致主流程卡死。超时后不等待 worker 以免主线程再次卡住。"""
+    ex = ThreadPoolExecutor(max_workers=1)
+    future = ex.submit(func)
+    try:
+        return future.result(timeout=timeout_seconds)
+    except FuturesTimeoutError:
+        ex.shutdown(wait=False)  # 不等待卡住的 worker，否则主线程会再卡到 worker 结束
+        raise TimeoutError(f"{label} 请求超时（{timeout_seconds}s），请检查网络或 API 状态") from None
+    else:
+        ex.shutdown(wait=True)
 
 
 # 股票名称映射（常见股票）
@@ -551,11 +567,11 @@ class GeminiAnalyzer:
             return
         
         try:
-            # base_url 可选，不填则使用 OpenAI 官方默认地址
-            client_kwargs = {"api_key": config.openai_api_key}
+            timeout = float(getattr(config, 'llm_request_timeout', 120))
+            client_kwargs = {"api_key": config.openai_api_key, "timeout": timeout}
             if config.openai_base_url and config.openai_base_url.startswith('http'):
                 client_kwargs["base_url"] = config.openai_base_url
-            
+
             self._openai_client = OpenAI(**client_kwargs)
             self._current_model_name = config.openai_model
             self._use_openai = True
@@ -662,7 +678,21 @@ class GeminiAnalyzer:
         config = get_config()
         max_retries = config.gemini_max_retries
         base_delay = config.gemini_retry_delay
-        
+        temperature = generation_config.get('temperature', config.openai_temperature)
+        max_tokens = generation_config.get('max_output_tokens', 8192)
+
+        # 模型调用详情日志：输入与参数
+        _prompt_preview = prompt[:800] + "..." if len(prompt) > 800 else prompt
+        _sys_preview = (self.SYSTEM_PROMPT[:300] + "...") if len(self.SYSTEM_PROMPT) > 300 else self.SYSTEM_PROMPT
+        logger.info(
+            "[LLM调用/OpenAI] 请求参数: model=%s, temperature=%s, max_tokens=%s, prompt_len=%d, system_len=%d",
+            self._current_model_name, temperature, max_tokens, len(prompt), len(self.SYSTEM_PROMPT),
+        )
+        request_timeout = getattr(config, 'llm_request_timeout', 120)
+        logger.info("[LLM调用/OpenAI] system 预览: %s", _sys_preview)
+        logger.info("[LLM调用/OpenAI] user prompt 预览: %s", _prompt_preview)
+        logger.debug("[LLM调用/OpenAI] 完整 user prompt: %s", prompt)
+        logger.info("[LLM调用/OpenAI] 正在等待 API 响应（最长 %d 秒），超时将自动重试或跳过…", request_timeout)
         for attempt in range(max_retries):
             try:
                 if attempt > 0:
@@ -672,21 +702,38 @@ class GeminiAnalyzer:
                     time.sleep(delay)
                 
                 config = get_config()
-                response = self._openai_client.chat.completions.create(
-                    model=self._current_model_name,
-                    messages=[
-                        {"role": "system", "content": self.SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=generation_config.get('temperature', config.openai_temperature),
-                    max_tokens=generation_config.get('max_output_tokens', 8192),
-                )
+                _start = time.time()
+
+                def _openai_call():
+                    return self._openai_client.chat.completions.create(
+                        model=self._current_model_name,
+                        messages=[
+                            {"role": "system", "content": self.SYSTEM_PROMPT},
+                            {"role": "user", "content": prompt}
+                        ],
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                response = _run_with_timeout(_openai_call, request_timeout, "OpenAI")
+                _elapsed = time.time() - _start
                 
                 if response and response.choices and response.choices[0].message.content:
-                    return response.choices[0].message.content
+                    out_text = response.choices[0].message.content
+                    _out_preview = out_text[:800] + "..." if len(out_text) > 800 else out_text
+                    logger.info(
+                        "[LLM调用/OpenAI] 响应: 耗时=%.2fs, 长度=%d, 预览: %s",
+                        _elapsed, len(out_text), _out_preview,
+                    )
+                    logger.debug("[LLM调用/OpenAI] 完整响应: %s", out_text)
+                    return out_text
                 else:
+                    logger.warning("[LLM调用/OpenAI] API 返回空响应 body=%s", response)
                     raise ValueError("OpenAI API 返回空响应")
                     
+            except (TimeoutError, FuturesTimeoutError) as e:
+                logger.warning(f"[OpenAI] 请求超时，第 {attempt + 1}/{max_retries} 次尝试: {e}")
+                if attempt == max_retries - 1:
+                    raise
             except Exception as e:
                 error_str = str(e)
                 is_rate_limit = '429' in error_str or 'rate' in error_str.lower() or 'quota' in error_str.lower()
@@ -739,17 +786,43 @@ class GeminiAnalyzer:
                     logger.info(f"[Gemini] 第 {attempt + 1} 次重试，等待 {delay:.1f} 秒...")
                     time.sleep(delay)
                 
-                response = self._model.generate_content(
-                    prompt,
-                    generation_config=generation_config,
-                    request_options={"timeout": 120}
+                # 模型调用详情日志：输入与参数
+                _prompt_preview = prompt[:800] + "..." if len(prompt) > 800 else prompt
+                logger.info(
+                    "[LLM调用/Gemini] 请求参数: model=%s, generation_config=%s, prompt_len=%d",
+                    getattr(self, '_current_model_name', 'unknown'), generation_config, len(prompt),
                 )
+                request_timeout = getattr(config, 'llm_request_timeout', 120)
+                logger.info("[LLM调用/Gemini] prompt 预览: %s", _prompt_preview)
+                logger.debug("[LLM调用/Gemini] 完整 prompt: %s", prompt)
+                logger.info("[LLM调用/Gemini] 正在等待 API 响应（最长 %d 秒），超时将自动重试或跳过…", request_timeout)
+                _start = time.time()
+
+                def _gemini_call():
+                    return self._model.generate_content(
+                        prompt,
+                        generation_config=generation_config,
+                        request_options={"timeout": request_timeout}
+                    )
+                response = _run_with_timeout(_gemini_call, request_timeout, "Gemini")
+                _elapsed = time.time() - _start
                 
                 if response and response.text:
-                    return response.text
+                    out_text = response.text
+                    _out_preview = out_text[:800] + "..." if len(out_text) > 800 else out_text
+                    logger.info(
+                        "[LLM调用/Gemini] 响应: 耗时=%.2fs, 长度=%d, 预览: %s",
+                        _elapsed, len(out_text), _out_preview,
+                    )
+                    logger.debug("[LLM调用/Gemini] 完整响应: %s", out_text)
+                    return out_text
                 else:
+                    logger.warning("[LLM调用/Gemini] 返回空响应 response=%s", response)
                     raise ValueError("Gemini 返回空响应")
                     
+            except (TimeoutError, FuturesTimeoutError) as e:
+                last_error = e
+                logger.warning(f"[Gemini] 请求超时，第 {attempt + 1}/{max_retries} 次尝试: {e}")
             except Exception as e:
                 last_error = e
                 error_str = str(e)
@@ -879,11 +952,19 @@ class GeminiAnalyzer:
             # 根据实际使用的 API 显示日志
             api_provider = "OpenAI" if self._use_openai else "Gemini"
             logger.info(f"[LLM调用] 开始调用 {api_provider} API...")
+            logger.info("[LLM调用] 正在生成决策仪表盘，预计需 1–2 分钟，请勿关闭...")
             
             # 使用带重试的 API 调用
             start_time = time.time()
             response_text = self._call_api_with_retry(prompt, generation_config)
             elapsed = time.time() - start_time
+
+            # 检测模型回显（返回了题目而非 JSON），避免把 prompt 当结果展示
+            if self._is_response_likely_echo(response_text):
+                logger.warning("[LLM返回] 检测到模型回显题目，重试一次...")
+                response_text = self._call_api_with_retry(prompt, generation_config)
+                if self._is_response_likely_echo(response_text):
+                    raise ValueError("模型返回了题目内容而非 JSON，请稍后重试")
 
             # 记录响应信息
             logger.info(f"[LLM返回] {api_provider} API 响应成功, 耗时 {elapsed:.2f}s, 响应长度 {len(response_text)} 字符")
@@ -1049,6 +1130,9 @@ class GeminiAnalyzer:
 ## 📰 舆情情报
 """
         if news_context:
+            # 限制舆情长度，避免 prompt 过长导致超时或模型只回显题目
+            max_news_len = 6000
+            news_for_prompt = news_context if len(news_context) <= max_news_len else news_context[:max_news_len] + "\n...(已截断)"
             prompt += f"""
 以下是 **{stock_name}({code})** 近7日的新闻搜索结果，请重点提取：
 1. 🚨 **风险警报**：减持、处罚、利空
@@ -1056,7 +1140,7 @@ class GeminiAnalyzer:
 3. 📊 **业绩预期**：年报预告、业绩快报
 
 ```
-{news_context}
+{news_for_prompt}
 ```
 """
         else:
@@ -1098,7 +1182,8 @@ class GeminiAnalyzer:
 - **具体狙击点位**：买入价、止损价、目标价（精确到分）
 - **检查清单**：每项用 ✅/⚠️/❌ 标记
 
-请输出完整的 JSON 格式决策仪表盘。"""
+### ⚠️ 输出格式（必须严格遵守）
+你的回复必须且仅为一个 JSON 对象：以 `{{` 开头、以 `}}` 结尾。不要重复题目，不要输出「以下是」「请重点提取」等任何非 JSON 前缀。直接输出 JSON。"""
         
         return prompt
     
@@ -1124,6 +1209,24 @@ class GeminiAnalyzer:
         else:
             return f"{amount:.0f} 元"
     
+    def _is_response_likely_echo(self, response_text: str) -> bool:
+        """
+        判断响应是否为模型回显的题目（而非 JSON 结果）。
+        若模型返回「以下是…请重点提取」等 prompt 结尾内容，会导致解析失败或误当结果展示。
+        """
+        if not response_text or len(response_text.strip()) < 50:
+            return False
+        stripped = response_text.strip()
+        # 正常 JSON 响应应以 { 开头，且包含决策仪表盘字段
+        if stripped.startswith('{') and ('"stock_name"' in stripped or '"dashboard"' in stripped):
+            return False
+        # 回显特征：以题目用语开头且没有 JSON 结构
+        echo_starts = ('以下是', '请重点提取', '请为 **', '请输出', '请直接输出')
+        first_300 = stripped[:300]
+        if any(first_300.startswith(s) or s in first_300 for s in echo_starts):
+            return True
+        return False
+
     def _parse_response(
         self, 
         response_text: str, 

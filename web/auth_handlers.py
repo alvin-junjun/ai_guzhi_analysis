@@ -409,11 +409,17 @@ class AuthApiHandler:
                 offset = max(0, int(q['offset'][0]))
             except (ValueError, TypeError):
                 pass
+        source_type = None
+        if q.get('source_type') and q['source_type'][0]:
+            st = q['source_type'][0].strip()
+            if st in ('direct', 'url_crawl', 'prompt_crawl'):
+                source_type = st
         user_service = get_user_service()
         items = user_service.get_analysis_history(
             user_id=context.user_id,
             limit=limit,
-            offset=offset
+            offset=offset,
+            source_type=source_type
         )
         return JsonResponse({'success': True, 'list': items})
     

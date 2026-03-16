@@ -200,7 +200,9 @@ class AnalysisService:
         code: str, 
         report_type: Union[ReportType, str] = ReportType.SIMPLE,
         source_message: Optional[BotMessage] = None,
-        user_id: Optional[int] = None
+        user_id: Optional[int] = None,
+        source_type: str = 'direct',
+        source_ref: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         提交异步分析任务
@@ -210,6 +212,8 @@ class AnalysisService:
             report_type: 报告类型枚举
             source_message: 来源消息（用于机器人回调）
             user_id: 用户 ID（用于持久化和使用量统计）
+            source_type: 分析来源 direct/url_crawl/prompt_crawl
+            source_ref: 来源引用（如 URL 或「自定义提示词」）
             
         Returns:
             任务信息字典
@@ -232,6 +236,8 @@ class AnalysisService:
             "error": None,
             "report_type": report_type.value,
             "user_id": user_id,
+            "source_type": source_type or 'direct',
+            "source_ref": source_ref,
         }
         
         # 保存到内存
@@ -248,7 +254,7 @@ class AnalysisService:
         
         # 提交到线程池
         self.executor.submit(
-            self._run_analysis, code, task_id, report_type, source_message, user_id
+            self._run_analysis, code, task_id, report_type, source_message, user_id, source_type, source_ref
         )
         
         logger.info(f"[AnalysisService] 已提交股票 {code} 的分析任务, task_id={task_id}, report_type={report_type.value}, user_id={user_id}")
@@ -305,19 +311,23 @@ class AnalysisService:
         task_id: str, 
         report_type: ReportType = ReportType.SIMPLE,
         source_message: Optional[BotMessage] = None,
-        user_id: Optional[int] = None
+        user_id: Optional[int] = None,
+        source_type: str = 'direct',
+        source_ref: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         执行单只股票分析
-        
+
         内部方法，在线程池中运行
-        
+
         Args:
             code: 股票代码
             task_id: 任务ID
             report_type: 报告类型枚举
             source_message: 来源消息
             user_id: 用户 ID
+            source_type: 分析来源 direct/url_crawl/prompt_crawl
+            source_ref: 来源引用
         """
         # 更新任务状态为运行中
         self._update_task_status(task_id, "running")
@@ -363,7 +373,9 @@ class AnalysisService:
                 # 保存分析历史
                 if user_id and self._persist_to_db:
                     self._save_analysis_history(
-                        user_id, task_id, code, result.name, result_data
+                        user_id, task_id, code, result.name, result_data,
+                        source_type=source_type or 'direct',
+                        source_ref=source_ref
                     )
                 
                 # 发送分析报告到用户邮箱
@@ -540,7 +552,9 @@ class AnalysisService:
         task_id: str,
         code: str,
         name: str,
-        result_data: Dict[str, Any]
+        result_data: Dict[str, Any],
+        source_type: str = 'direct',
+        source_ref: Optional[str] = None
     ):
         """保存分析历史"""
         try:
@@ -567,7 +581,9 @@ class AnalysisService:
                 ai_summary=result_data.get('analysis_summary'),
                 score=score,
                 sentiment=sentiment,
-                task_id=task_id
+                task_id=task_id,
+                source_type=source_type or 'direct',
+                source_ref=source_ref
             )
         except Exception as e:
             logger.error(f"保存分析历史失败: {e}")

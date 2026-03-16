@@ -258,6 +258,10 @@ class AnalysisHistory(Base):
     # 时间戳
     created_at = Column(DateTime, default=datetime.now, comment='创建时间')
     
+    # 来源类型：direct=直接录入股票, url_crawl=文章URL抓取, prompt_crawl=提示词抓取
+    source_type = Column(String(20), default='direct', nullable=False, index=True, comment='分析来源类型')
+    source_ref = Column(Text, nullable=True, comment='来源引用，如文章URL或“自定义提示词”')
+    
     # 索引
     __table_args__ = (
         Index('ix_user_stock_date', 'user_id', 'stock_code', 'analysis_date'),
@@ -282,6 +286,8 @@ class AnalysisHistory(Base):
             'ai_summary': self.ai_summary,
             'score': self.score,
             'sentiment': self.sentiment,
+            'source_type': self.source_type or 'direct',
+            'source_ref': self.source_ref,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
     

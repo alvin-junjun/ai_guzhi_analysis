@@ -26,6 +26,7 @@ AkshareFetcher - 主数据源 (Priority 1)
 import logging
 import os
 import random
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -46,6 +47,10 @@ from .realtime_types import (
     get_realtime_circuit_breaker, get_chip_circuit_breaker,
     safe_float, safe_int  # 使用统一的类型转换函数
 )
+
+# 筹码分布接口内部使用 PyMiniRacer/V8，Windows 下多线程并发会触发 V8 崩溃（partition_address_space）
+# 使用全局锁串行化调用，避免多股同时拉取时进程崩溃
+_CHIP_DISTRIBUTION_LOCK = threading.Lock()
 
 
 # 保留旧的 RealtimeQuote 别名，用于向后兼容
@@ -1225,23 +1230,42 @@ class AkshareFetcher(BaseFetcher):
             logger.debug(f"[API跳过] {stock_code} 是 ETF/指数，无筹码分布数据")
             return None
         
-        # 东方财富筹码接口易出现 RemoteDisconnected/Connection aborted，做有限次重试
+        # 东方财富筹码接口易出现 RemoteDisconnected/Connection aborted，做有限次重试；并加超时避免卡死
         max_attempts = 3
         df = None
         api_elapsed = 0.0
+        try:
+            from src.config import get_config
+            timeout_sec = getattr(get_config(), 'chip_distribution_timeout', 25)
+        except Exception:
+            timeout_sec = 25
         for attempt in range(1, max_attempts + 1):
             try:
                 # 防封禁策略
                 self._set_random_user_agent()
                 self._enforce_rate_limit()
                 
-                logger.info(f"[API调用] ak.stock_cyq_em(symbol={stock_code}) 获取筹码分布... (attempt {attempt}/{max_attempts})")
+                logger.info(f"[API调用] ak.stock_cyq_em(symbol={stock_code}) 获取筹码分布... (attempt {attempt}/{max_attempts}, timeout={timeout_sec}s)")
                 import time as _time
+                import concurrent.futures
                 api_start = _time.time()
-                
-                df = ak.stock_cyq_em(symbol=stock_code)
+
+                def _fetch():
+                    return ak.stock_cyq_em(symbol=stock_code)
+
+                # 串行化筹码接口调用：akshare 内部用 PyMiniRacer/V8，Windows 下并发会崩溃
+                with _CHIP_DISTRIBUTION_LOCK:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        future = pool.submit(_fetch)
+                        df = future.result(timeout=timeout_sec)
                 api_elapsed = _time.time() - api_start
                 break
+            except concurrent.futures.TimeoutError:
+                logger.warning(f"[API超时] 获取 {stock_code} 筹码分布超时 ({timeout_sec}s)，attempt {attempt}/{max_attempts}")
+                if attempt >= max_attempts:
+                    return None
+                time.sleep(min(2 ** attempt, 10))
+                continue
             except Exception as e:
                 err_msg = str(e).lower()
                 # 仅对“连接被远端关闭/中断”类错误重试
@@ -1255,6 +1279,7 @@ class AkshareFetcher(BaseFetcher):
                     wait = min(2 ** attempt, 10)
                     logger.warning(f"[API错误] 获取 {stock_code} 筹码分布失败 (attempt {attempt}/{max_attempts}): {e}，{wait}s 后重试")
                     time.sleep(wait)
+                    continue
                 else:
                     logger.error(f"[API错误] 获取 {stock_code} 筹码分布失败: {e}")
                     return None

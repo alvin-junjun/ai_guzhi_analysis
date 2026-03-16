@@ -209,11 +209,13 @@ class Router:
         
         # 匹配路由
         route = self.match(path, "POST")
-        
+
         if route is None:
+            logger.warning("[Router] POST 未匹配到路由 path=%s", path)
             self._send_not_found(request_handler, path)
             return
-        
+
+        logger.info("[Router] POST %s -> 已匹配，调用处理器", path)
         try:
             # 调用处理器（传入 form_data 和 headers）
             # 检查处理器是否需要 headers 参数
@@ -478,6 +480,12 @@ def create_default_router() -> Router:
         "/task", "GET",
         lambda q: api_handler.handle_task_status(q),
         "查询任务状态"
+    )
+    
+    router.register(
+        "/api/article-extract", "POST",
+        lambda form, headers=None: api_handler.handle_article_extract(form, headers or {}),
+        "从文章URL或提示词抓取股票并提交分析"
     )
     
     router.register(

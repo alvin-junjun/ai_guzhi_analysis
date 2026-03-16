@@ -15,6 +15,7 @@ import logging
 import random
 import time
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -25,15 +26,16 @@ from newspaper import Article, Config
 logger = logging.getLogger(__name__)
 
 
-def fetch_url_content(url: str, timeout: int = 5) -> str:
+def fetch_url_content(url: str, timeout: int = 3) -> str:
     """
-    获取 URL 网页正文内容 (使用 newspaper3k)
+    获取 URL 网页正文内容 (使用 newspaper3k)。
+    注意：可能阻塞，仅适合单次、短超时调用；主流程舆情搜索已不再使用，避免多 URL 串行导致卡死。
     """
     try:
-        # 配置 newspaper3k
+        # 配置 newspaper3k，短超时避免阻塞
         config = Config()
         config.browser_user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        config.request_timeout = timeout
+        config.request_timeout = min(timeout, 10)
         config.fetch_images = False  # 不下载图片
         config.memoize_articles = False # 不缓存
 
@@ -444,23 +446,8 @@ class SerpAPISearchProvider(BaseSearchProvider):
                 link = item.get('link', '')
                 snippet = item.get('snippet', '')
 
-                # 增强：如果需要，解析网页正文
-                # 策略：如果摘要太短，或者为了获取更多信息，可以请求网页
-                # 这里我们对所有结果尝试获取正文，但为了性能，仅获取前1000字符
-                content = ""
-                if link:
-                   try:
-                       fetched_content = fetch_url_content(link, timeout=5)
-                       if fetched_content:
-                           # 如果获取到了正文，将其拼接到 snippet 中，或者替换 snippet
-                           # 这里选择拼接，保留原摘要
-                           content = fetched_content
-                           if len(content) > 500:
-                               snippet = f"{snippet}\n\n【网页详情】\n{content[:500]}..."
-                           else:
-                               snippet = f"{snippet}\n\n【网页详情】\n{content}"
-                   except Exception as e:
-                       logger.debug(f"[SerpAPI] Fetch content failed: {e}")
+                # 仅使用 API 返回的 snippet，不再逐条抓取网页正文，避免多 URL 串行请求导致程序卡死
+                # （原 fetch_url_content 在舆情阶段易造成长时间阻塞）
 
                 results.append(SearchResult(
                     title=item.get('title', ''),
@@ -919,16 +906,17 @@ class SearchService:
             },
         ]
         
-        logger.info(f"开始多维度情报搜索: {stock_name}({stock_code})")
+        # 单维度搜索超时（秒），避免某一次 API 无响应导致整体卡死
+        PER_DIMENSION_TIMEOUT = 10
+        total_dims = min(len(search_dimensions), max_searches)
+        logger.info(f"开始多维度情报搜索: {stock_name}({stock_code})，共 {total_dims} 维，单维超时 {PER_DIMENSION_TIMEOUT}s")
         
-        # 轮流使用不同的搜索引擎
         provider_index = 0
         
-        for dim in search_dimensions:
+        for idx, dim in enumerate(search_dimensions):
             if search_count >= max_searches:
                 break
             
-            # 选择搜索引擎（轮流使用）
             available_providers = [p for p in self._providers if p.is_available]
             if not available_providers:
                 break
@@ -936,20 +924,46 @@ class SearchService:
             provider = available_providers[provider_index % len(available_providers)]
             provider_index += 1
             
-            logger.info(f"[情报搜索] {dim['desc']}: 使用 {provider.name}")
+            current_step = idx + 1
+            logger.info(f"[情报搜索] ({current_step}/{total_dims}) {dim['desc']}，使用 {provider.name}...")
             
-            response = provider.search(dim['query'], max_results=3)
+            def _one_search():
+                return provider.search(dim['query'], max_results=3)
+            
+            try:
+                with ThreadPoolExecutor(max_workers=1) as ex:
+                    future = ex.submit(_one_search)
+                    response = future.result(timeout=PER_DIMENSION_TIMEOUT)
+            except FuturesTimeoutError:
+                logger.warning(f"[情报搜索] ({current_step}/{total_dims}) {dim['desc']}: 超时({PER_DIMENSION_TIMEOUT}s)，跳过")
+                response = SearchResponse(
+                    query=dim['query'],
+                    results=[],
+                    provider=provider.name,
+                    success=False,
+                    error_message=f"单次搜索超时({PER_DIMENSION_TIMEOUT}s)",
+                )
+            except Exception as e:
+                logger.warning(f"[情报搜索] ({current_step}/{total_dims}) {dim['desc']}: 异常 - {e}")
+                response = SearchResponse(
+                    query=dim['query'],
+                    results=[],
+                    provider=provider.name,
+                    success=False,
+                    error_message=str(e),
+                )
+            
             results[dim['name']] = response
             search_count += 1
             
             if response.success:
-                logger.info(f"[情报搜索] {dim['desc']}: 获取 {len(response.results)} 条结果")
+                logger.info(f"[情报搜索] ({current_step}/{total_dims}) {dim['desc']}: 获取 {len(response.results)} 条结果")
             else:
-                logger.warning(f"[情报搜索] {dim['desc']}: 搜索失败 - {response.error_message}")
+                logger.debug(f"[情报搜索] {dim['desc']}: 无结果或失败 - {response.error_message}")
             
-            # 短暂延迟避免请求过快
-            time.sleep(0.5)
+            time.sleep(0.3)
         
+        logger.info(f"[情报搜索] 全部完成: {stock_name}({stock_code})，共 {len(results)} 个维度")
         return results
     
     def format_intel_report(self, intel_results: Dict[str, SearchResponse], stock_name: str) -> str:

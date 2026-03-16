@@ -640,13 +640,17 @@ def render_config_page(
     Args:
         stock_list: 当前自选股列表（已弃用，保留兼容）
         message: 可选的提示消息
-        nav_ssr: 服务端鉴权结果，用于首屏渲染导航栏，避免登录后仍显示未登录。格式:
-                 {"display_name": str, "level_text": str, "is_vip": bool} 或 None
+        nav_ssr: 服务端鉴权结果，用于首屏渲染导航栏，避免首屏一直显示加载中。
+                 格式: {"display_name", "level_text", "is_vip"} 已登录；
+                       {"unauthenticated": True} 未登录；None 表示未传 headers 的兜底。
     """
     toast_html = render_toast(message) if message else ""
     if nav_ssr:
-        nav_user_info_html, nav_links_html = _build_nav_ssr_html(nav_ssr)
-        nav_initial = f'<span id="nav_user_info">{nav_user_info_html}</span><div id="nav_links" class="nav-links">{nav_links_html}</div>'
+        if nav_ssr.get("unauthenticated"):
+            nav_initial = '<span id="nav_user_info">未登录</span><div id="nav_links" class="nav-links"><a href="/login">🔑 登录</a><a href="/register">📝 注册</a></div>'
+        else:
+            nav_user_info_html, nav_links_html = _build_nav_ssr_html(nav_ssr)
+            nav_initial = f'<span id="nav_user_info">{nav_user_info_html}</span><div id="nav_links" class="nav-links">{nav_links_html}</div>'
         nav_data_ssr = ' data-nav-ssr="1"'
     else:
         nav_initial = '<span id="nav_user_info">加载中...</span><div id="nav_links" class="nav-links"></div>'
@@ -919,7 +923,12 @@ def render_config_page(
                             });
                     }, 500);
                 } else {
-                    alert('提交失败: ' + (data.error || '未知错误'));
+                    const msg = data.error || '未知错误';
+                    if (data.code === 'LIMIT_EXCEEDED' && data.redirect && confirm(msg + '\\n\\n是否前往会员页？')) {
+                        window.location.href = data.redirect;
+                    } else {
+                        alert('提交失败: ' + msg);
+                    }
                 }
             })
             .catch(error => {
@@ -931,6 +940,17 @@ def render_config_page(
                 updateButtonState();
             });
     };
+
+    // 供「文章/提示词抓取」区块使用：将返回的 task_id 列表加入当前任务列表并开始轮询
+    window.addTasksFromArticleExtract = function(taskIds, reportType) {{
+        if (!taskIds || taskIds.length === 0) return;
+        var rt = reportType || (reportTypeSelect ? reportTypeSelect.value : 'simple');
+        taskIds.forEach(function(tid) {{
+            tasks.set(tid, {{ task: {{ code: tid.split('_')[0], status: 'running', start_time: new Date().toISOString(), report_type: rt }}, pollCount: 0 }});
+        }});
+        renderAllTasks();
+        startPolling();
+    }};
 
     // 初始化
     updateButtonState();
@@ -1448,6 +1468,47 @@ function showToast(message, type) {
       </p>
     </div>
 
+    <!-- 从文章/提示词抓取股票并分析 -->
+    <div class="analysis-section article-extract-section">
+      <h3>📄 从文章或提示词抓取股票并分析</h3>
+      <p class="subtitle" style="font-size: 0.8rem; margin-bottom: 0.75rem;">支持输入文章 URL（如公众号链接）或自定义提示词，由多模型分析出股票后自动提交本系统分析</p>
+      <div class="form-group" style="margin-bottom: 0.5rem;">
+        <div style="display: flex; gap: 1rem; margin-bottom: 0.5rem;">
+          <label style="display: flex; align-items: center; gap: 0.35rem; cursor: pointer;">
+            <input type="radio" name="article_extract_mode" value="url" checked id="article_mode_url">
+            <span>文章 URL</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.35rem; cursor: pointer;">
+            <input type="radio" name="article_extract_mode" value="prompt" id="article_mode_prompt">
+            <span>提示词</span>
+          </label>
+        </div>
+      </div>
+      <div id="article_url_wrap" class="form-group">
+        <input type="text" id="article_extract_url" placeholder="https://mp.weixin.qq.com/s/xxxxx" style="width: 100%;">
+      </div>
+      <div id="article_prompt_wrap" class="form-group" style="display: none;">
+        <textarea id="article_extract_content" rows="4" placeholder="例如：请列出当前热点板块（如人工智能、低空经济）的龙头股，仅输出代码与名称" style="width: 100%; resize: vertical;"></textarea>
+      </div>
+      <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.75rem;">
+        <select id="article_report_type" class="report-select" title="报告类型">
+          <option value="simple">📝 精简报告</option>
+          <option value="full">📊 完整报告</option>
+        </select>
+        <label style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.85rem;">
+          <span>取前</span>
+          <select id="article_top_n" style="padding: 0.35rem 0.5rem; border-radius: 0.35rem; border: 1px solid var(--border);">
+            <option value="3">3</option>
+            <option value="5" selected>5</option>
+            <option value="8">8</option>
+            <option value="10">10</option>
+          </select>
+          <span>只股票</span>
+        </label>
+      </div>
+      <button type="button" id="article_extract_btn" class="btn-analysis">🔍 抓取并分析</button>
+    </div>
+
     <hr class="section-divider">
 
     <!-- 用户自选股配置区域 -->
@@ -1499,6 +1560,61 @@ function showToast(message, type) {
 
   {toast_html}
   {analysis_js}
+  <script>
+  (function() {{
+    var modeUrl = document.getElementById('article_mode_url');
+    var modePrompt = document.getElementById('article_mode_prompt');
+    var wrapUrl = document.getElementById('article_url_wrap');
+    var wrapPrompt = document.getElementById('article_prompt_wrap');
+    if (modeUrl) modeUrl.addEventListener('change', function() {{ wrapUrl.style.display = 'block'; wrapPrompt.style.display = 'none'; }});
+    if (modePrompt) modePrompt.addEventListener('change', function() {{ wrapUrl.style.display = 'none'; wrapPrompt.style.display = 'block'; }});
+
+    var btn = document.getElementById('article_extract_btn');
+    if (btn) {{
+      btn.addEventListener('click', function() {{
+        var mode = document.querySelector('input[name="article_extract_mode"]:checked');
+        mode = mode ? mode.value : 'url';
+        var url = (document.getElementById('article_extract_url') || {{ value: '' }}).value.trim();
+        var content = (document.getElementById('article_extract_content') || {{ value: '' }}).value.trim();
+        var reportType = (document.getElementById('article_report_type') || {{ value: 'simple' }}).value;
+        var topN = (document.getElementById('article_top_n') || {{ value: '5' }}).value;
+
+        if (mode === 'url' && !url) {{ alert('请输入文章 URL'); return; }}
+        if (mode === 'prompt' && !content) {{ alert('请输入提示词内容'); return; }}
+
+        btn.disabled = true;
+        btn.textContent = '提交中...';
+        var body = 'mode=' + encodeURIComponent(mode) + '&report_type=' + encodeURIComponent(reportType) + '&top_n=' + encodeURIComponent(topN);
+        if (mode === 'url') body += '&url=' + encodeURIComponent(url);
+        else body += '&content=' + encodeURIComponent(content);
+
+        var headers = {{}};
+        try {{ var t = sessionStorage.getItem('session_token'); if (t) headers['Authorization'] = 'Bearer ' + t; }} catch (e) {{}}
+        headers['Content-Type'] = 'application/x-www-form-urlencoded';
+
+        fetch('/api/article-extract', {{ method: 'POST', credentials: 'include', headers: headers, body: body }})
+          .then(function(r) {{ return r.json(); }})
+          .then(function(data) {{
+            if (data.success) {{
+              if (data.task_ids && data.task_ids.length > 0 && typeof window.addTasksFromArticleExtract === 'function') {{
+                window.addTasksFromArticleExtract(data.task_ids, reportType);
+              }}
+              if (data.message) alert(data.message);
+            }} else {{
+              var msg = data.error || '请求失败';
+              if (data.code === 'LIMIT_EXCEEDED' && data.redirect && confirm(msg + '\\n\\n是否前往会员页？')) {{
+                window.location.href = data.redirect;
+              }} else {{
+                alert(msg);
+              }}
+            }}
+          }})
+          .catch(function(err) {{ alert('请求失败: ' + (err.message || err)); }})
+          .finally(function() {{ btn.disabled = false; btn.textContent = '🔍 抓取并分析'; }});
+      }});
+    }}
+  }})();
+  </script>
 """
 
     page = render_base(

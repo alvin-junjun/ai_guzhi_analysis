@@ -13,7 +13,7 @@ A股自选股智能分析系统 - 核心分析流水线
 
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from datetime import date
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -209,26 +209,39 @@ class StockAnalysisPipeline:
             except Exception as e:
                 logger.warning(f"[{code}] 趋势分析失败: {e}")
             
-            # Step 4: 多维度情报搜索（最新消息+风险排查+业绩预期）
+            # Step 4: 多维度情报搜索（最新消息+风险排查+业绩预期），带超时防止卡死
             news_context = None
+            INTEL_SEARCH_TIMEOUT = 45  # 秒，超时则跳过舆情继续分析
             if self.search_service.is_available:
-                logger.info(f"[{code}] 开始多维度情报搜索...")
-                
-                # 使用多维度搜索（最多5次搜索）
-                intel_results = self.search_service.search_comprehensive_intel(
-                    stock_code=code,
-                    stock_name=stock_name,
-                    max_searches=5
-                )
-                
-                # 格式化情报报告
-                if intel_results:
-                    news_context = self.search_service.format_intel_report(intel_results, stock_name)
-                    total_results = sum(
-                        len(r.results) for r in intel_results.values() if r.success
+                logger.info(f"[{code}] 开始多维度情报搜索（超时 {INTEL_SEARCH_TIMEOUT}s）...")
+
+                def _do_intel_search():
+                    intel_results = self.search_service.search_comprehensive_intel(
+                        stock_code=code,
+                        stock_name=stock_name,
+                        max_searches=3  # 3 维即可覆盖主要舆情，减少总耗时
                     )
-                    logger.info(f"[{code}] 情报搜索完成: 共 {total_results} 条结果")
-                    logger.debug(f"[{code}] 情报搜索结果:\n{news_context}")
+                    if not intel_results:
+                        return None, 0
+                    report = self.search_service.format_intel_report(intel_results, stock_name)
+                    total = sum(len(r.results) for r in intel_results.values() if r.success)
+                    return report, total
+
+                try:
+                    with ThreadPoolExecutor(max_workers=1) as ex:
+                        future = ex.submit(_do_intel_search)
+                        news_context, total_results = future.result(timeout=INTEL_SEARCH_TIMEOUT)
+                    if news_context is not None:
+                        logger.info(f"[{code}] 情报搜索完成: 共 {total_results} 条结果，即将调用 AI 分析（约 1–2 分钟）")
+                        logger.debug(f"[{code}] 情报搜索结果:\n{news_context}")
+                    else:
+                        logger.info(f"[{code}] 无舆情数据，将仅基于技术面与实时行情分析")
+                except FuturesTimeoutError:
+                    logger.warning(f"[{code}] 情报搜索总超时({INTEL_SEARCH_TIMEOUT}s)，跳过舆情数据，继续分析")
+                    news_context = None
+                except Exception as e:
+                    logger.warning(f"[{code}] 情报搜索异常: {e}，跳过舆情数据，继续分析")
+                    news_context = None
             else:
                 logger.info(f"[{code}] 搜索服务不可用，跳过情报搜索")
             
@@ -256,9 +269,24 @@ class StockAnalysisPipeline:
                 stock_name  # 传入股票名称
             )
             
-            # Step 7: 调用 AI 分析（传入增强的上下文和新闻）
-            result = self.analyzer.analyze(enhanced_context, news_context=news_context)
-            
+            # Step 7: 调用 AI 分析（传入增强的上下文和新闻），带超时防止 LLM 无响应卡死
+            config = get_config()
+            ANALYZE_TIMEOUT = getattr(config, 'llm_request_timeout', 120) + 30  # 略大于 analyzer 内单次请求超时
+            logger.info(f"[{code}] 开始调用 AI 生成分析报告（含舆情解读），请稍候 1–2 分钟（超时 {ANALYZE_TIMEOUT}s 将自动跳过）...")
+            ex = ThreadPoolExecutor(max_workers=1)
+            try:
+                future = ex.submit(
+                    self.analyzer.analyze,
+                    enhanced_context,
+                    news_context=news_context,
+                )
+                result = future.result(timeout=ANALYZE_TIMEOUT)
+            except FuturesTimeoutError:
+                logger.error(f"[{code}] AI 分析超时({ANALYZE_TIMEOUT}s)，请检查网络或 API 状态，本股跳过继续执行")
+                ex.shutdown(wait=False)  # 不等待卡住的 worker，避免主线程在此处再卡 1 小时
+                return None
+            else:
+                ex.shutdown(wait=True)
             return result
             
         except Exception as e:

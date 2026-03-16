@@ -184,6 +184,7 @@ class DatabaseManager:
         # 创建所有表（仅对 SQLite 有效，MySQL 请使用 init_database.sql 脚本）
         if not config.is_mysql():
             Base.metadata.create_all(self._engine)
+            self._migrate_analysis_history_source_columns()
 
         self._initialized = True
         logger.info(f"数据库初始化完成")
@@ -204,6 +205,26 @@ class DatabaseManager:
         if cls._instance is not None:
             cls._instance._engine.dispose()
             cls._instance = None
+
+    def _migrate_analysis_history_source_columns(self) -> None:
+        """为已有 SQLite 的 analysis_history 表添加 source_type、source_ref 列（若不存在）。"""
+        try:
+            with self._engine.connect() as conn:
+                for col, sql in [
+                    ("source_type", "ALTER TABLE analysis_history ADD COLUMN source_type VARCHAR(20) DEFAULT 'direct'"),
+                    ("source_ref", "ALTER TABLE analysis_history ADD COLUMN source_ref TEXT"),
+                ]:
+                    try:
+                        conn.execute(__import__("sqlalchemy").text(sql))
+                        conn.commit()
+                        logger.info("analysis_history 表已添加列: %s", col)
+                    except Exception as e:
+                        if "duplicate column" in str(e).lower() or "already exists" in str(e).lower():
+                            pass
+                        else:
+                            logger.debug("迁移列 %s 时跳过（可能已存在）: %s", col, e)
+        except Exception as e:
+            logger.warning("analysis_history 表迁移跳过: %s", e)
 
     @classmethod
     def _cleanup_engine(cls, engine) -> None:
