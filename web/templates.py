@@ -991,11 +991,11 @@ document.addEventListener('DOMContentLoaded', function() {
 async function loadUserNav() {
     const userInfo = document.getElementById('nav_user_info');
     const navLinks = document.getElementById('nav_links');
-    
+
     try {
         const response = await fetch('/api/auth/user', { credentials: 'include', headers: getAuthHeaders() });
         const data = await response.json();
-        
+
         if (response.status === 401 || !data.success) {
             // 未登录
             userInfo.textContent = '未登录';
@@ -1007,9 +1007,9 @@ async function loadUserNav() {
             const displayName = user.nickname || user.email || user.phone || '用户';
             const isVip = benefits.level === 'vip';
             const levelText = benefits.plan_name || (user.membership_level && user.membership_level !== 'free' ? '会员' : '免费版');
-            
+
             userInfo.innerHTML = '👤 ' + displayName + ' <span style="color:#999;font-size:12px;">(' + levelText + ')</span>';
-            
+
             let linksHtml = '<a href="/user">👤 个人中心</a>';
             linksHtml += '<a href="/user/history">📋 历史记录</a>';
             linksHtml += '<a href="#" class="btn-share" onclick="copyShareLink(event)">📤 分享</a>';
@@ -1498,10 +1498,10 @@ function showToast(message, type) {
         <label style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.85rem;">
           <span>取前</span>
           <select id="article_top_n" style="padding: 0.35rem 0.5rem; border-radius: 0.35rem; border: 1px solid var(--border);">
-            <option value="3">3</option>
-            <option value="5" selected>5</option>
-            <option value="8">8</option>
-            <option value="10">10</option>
+            <option value="2">2</option>
+#             <option value="3" selected>3</option>
+#             <option value="8">8</option>
+#             <option value="10">10</option>
           </select>
           <span>只股票</span>
         </label>
