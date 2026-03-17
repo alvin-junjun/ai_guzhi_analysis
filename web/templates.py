@@ -1499,9 +1499,6 @@ function showToast(message, type) {
           <span>取前</span>
           <select id="article_top_n" style="padding: 0.35rem 0.5rem; border-radius: 0.35rem; border: 1px solid var(--border);">
             <option value="2">2</option>
-#             <option value="3" selected>3</option>
-#             <option value="8">8</option>
-#             <option value="10">10</option>
           </select>
           <span>只股票</span>
         </label>
