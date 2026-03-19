@@ -656,14 +656,16 @@ def render_config_page(
         nav_initial = '<span id="nav_user_info">加载中...</span><div id="nav_links" class="nav-links"></div>'
         nav_data_ssr = ""
 
-    # 分析组件的 JavaScript - 支持多任务
+    # 分析组件的 JavaScript - 支持多任务（在 DOMContentLoaded 中初始化，确保 analysis_code/analysis_btn 已存在，避免点击分析按钮无反应）
     analysis_js = """
 <script>
 (function() {
+    function initAnalysisSection() {
     const codeInput = document.getElementById('analysis_code');
     const submitBtn = document.getElementById('analysis_btn');
     const taskList = document.getElementById('task_list');
     const reportTypeSelect = document.getElementById('report_type');
+    if (!codeInput || !submitBtn) { return; }
 
     // 任务管理
     const tasks = new Map(); // taskId -> {task, pollCount}
@@ -884,6 +886,7 @@ def render_config_page(
         const isUSStock = /^[A-Z]{1,5}(\.[A-Z]{1,2})?$/.test(code);
 
         if (!(isAStock || isHKStock || isUSStock)) {
+            alert('请输入有效的股票代码（A股6位数字 / 港股 HK+5位数字 / 美股代码）');
             return;
         }
 
@@ -942,19 +945,27 @@ def render_config_page(
     };
 
     // 供「文章/提示词抓取」区块使用：将返回的 task_id 列表加入当前任务列表并开始轮询
-    window.addTasksFromArticleExtract = function(taskIds, reportType) {{
+    // 注意：本段在普通 Python 字符串中，勿用 {{ }}（仅 f-string 才需要双写）
+    window.addTasksFromArticleExtract = function(taskIds, reportType) {
         if (!taskIds || taskIds.length === 0) return;
         var rt = reportType || (reportTypeSelect ? reportTypeSelect.value : 'simple');
-        taskIds.forEach(function(tid) {{
-            tasks.set(tid, {{ task: {{ code: tid.split('_')[0], status: 'running', start_time: new Date().toISOString(), report_type: rt }}, pollCount: 0 }});
-        }});
+        taskIds.forEach(function(tid) {
+            tasks.set(tid, { task: { code: tid.split('_')[0], status: 'running', start_time: new Date().toISOString(), report_type: rt }, pollCount: 0 });
+        });
         renderAllTasks();
         startPolling();
-    }};
+    };
 
     // 初始化
     updateButtonState();
     renderAllTasks();
+    } // end initAnalysisSection
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initAnalysisSection);
+    } else {
+        initAnalysisSection();
+    }
 })();
 
 // ========== 用户导航相关 ==========
@@ -1455,7 +1466,7 @@ function showToast(message, type) {
             <option value="simple">📝 精简报告</option>
             <option value="full">📊 完整报告</option>
           </select>
-          <button type="button" id="analysis_btn" class="btn-analysis" onclick="submitAnalysis()" disabled>
+          <button type="button" id="analysis_btn" class="btn-analysis" onclick="submitAnalysis()">
             🚀 分析
           </button>
         </div>
